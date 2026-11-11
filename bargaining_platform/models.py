@@ -1,6 +1,8 @@
-"""Define the scenario configuration schema."""
+"""Define the scenario schema and negotiation data models."""
 
+from dataclasses import asdict, dataclass, field
 from math import isfinite
+from typing import Any
 
 
 PUBLIC_KEYS = {"scenario_id", "max_rounds", "starting_role", "catalog", "private_profiles"}
@@ -87,3 +89,94 @@ def validate_scenario(data: object) -> dict:
             _number(value, f"{location}.{item_id}")
     _number(buyer["budget"], "private_profiles.buyer.budget")
     return scenario
+
+
+class _Serializable:
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        return cls(**data)
+
+
+@dataclass
+class Term(_Serializable):
+    type: str
+    item_id: str | None = None
+    quantity: int | float | None = None
+    unit_price: int | float | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Condition(_Serializable):
+    type: str
+    discounted_item_id: str
+    discount_per_unit: int | float
+    required_item_id: str
+    minimum_required_quantity: int | float
+
+
+@dataclass
+class Proposal(_Serializable):
+    proposal_id: str
+    acceptance_mode: str
+    terms: list[Term]
+    conditions: list[Condition]
+    decision_summary: str
+    original_prices: dict[str, int | float]
+    effective_prices: dict[str, int | float]
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Proposal":
+        return cls(**{
+            **data,
+            "terms": [Term.from_dict(term) for term in data["terms"]],
+            "conditions": [Condition.from_dict(condition) for condition in data["conditions"]],
+        })
+
+
+@dataclass
+class Action(_Serializable):
+    action_type: str
+    proposal_id: str | None = None
+    proposal: Proposal | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Action":
+        proposal = data.get("proposal")
+        return cls(**{**data, "proposal": Proposal.from_dict(proposal) if proposal is not None else None})
+
+
+@dataclass
+class ValidationResult(_Serializable):
+    ok: bool
+    error_code: str | None = None
+    message: str | None = None
+
+
+@dataclass
+class Outcome(_Serializable):
+    status: str
+    final_proposal_id: str | None = None
+    utility_metrics: dict[str, int | float] = field(default_factory=dict)
+
+
+@dataclass
+class GameState(_Serializable):
+    current_actor: str
+    round_number: int
+    active_proposal: Proposal | None = None
+    public_transcript: list[dict] = field(default_factory=list)
+    outcome: Outcome | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "GameState":
+        proposal = data.get("active_proposal")
+        outcome = data.get("outcome")
+        return cls(**{
+            **data,
+            "active_proposal": Proposal.from_dict(proposal) if proposal is not None else None,
+            "outcome": Outcome.from_dict(outcome) if outcome is not None else None,
+        })

@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -16,21 +18,19 @@ def test_shop_bundle_loads():
     assert [entry["id"] for entry in scenario["catalog"]] == ["A", "B"]
 
 
-def test_missing_catalog_id_is_rejected(tmp_path):
+def test_missing_catalog_id_is_rejected():
     data = _sample_data()
     del data["catalog"][0]["id"]
-    path = tmp_path / "missing_id.json"
-    path.write_text(json.dumps(data), encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"Missing required key: catalog\[0\]\.id"):
-        load_scenario(str(path))
+    with patch.object(Path, "read_text", return_value=json.dumps(data)):
+        with pytest.raises(ValueError, match=r"Missing required key: catalog\[0\]\.id"):
+            load_scenario("missing_id.json")
 
 
-def test_public_field_under_private_profiles_is_rejected(tmp_path):
+def test_public_field_under_private_profiles_is_rejected():
     data = _sample_data()
     data["private_profiles"]["catalog"] = data.pop("catalog")
-    path = tmp_path / "ambiguous_visibility.json"
-    path.write_text(json.dumps(data), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Ambiguous visibility"):
-        load_scenario(str(path))
+    with patch.object(Path, "read_text", return_value=json.dumps(data)):
+        with pytest.raises(ValueError, match="Ambiguous visibility"):
+            load_scenario("ambiguous_visibility.json")
