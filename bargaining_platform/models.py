@@ -176,6 +176,7 @@ class GameState(_Serializable):
     private_profiles: dict = field(default_factory=dict)
     invalid_attempts: int = 0
     private_attempt_log: list[dict] = field(default_factory=list)
+    max_rounds: int = 0
 
     @classmethod
     def from_dict(cls, data: dict) -> "GameState":

@@ -14,6 +14,7 @@ class NegotiationEngine:
             round_number=1,
             catalog=scenario["catalog"],
             private_profiles=scenario["private_profiles"],
+            max_rounds=scenario["max_rounds"],
         )
         self.action_count = 0
 
