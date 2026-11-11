@@ -107,6 +107,7 @@ class Term(_Serializable):
     quantity: int | float | None = None
     unit_price: int | float | None = None
     details: dict[str, Any] = field(default_factory=dict)
+    unit: str | None = None
 
 
 @dataclass
@@ -142,6 +143,7 @@ class Action(_Serializable):
     action_type: str
     proposal_id: str | None = None
     proposal: Proposal | None = None
+    actor: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "Action":
@@ -170,6 +172,9 @@ class GameState(_Serializable):
     active_proposal: Proposal | None = None
     public_transcript: list[dict] = field(default_factory=list)
     outcome: Outcome | None = None
+    catalog: list[dict] = field(default_factory=list)
+    invalid_attempts: int = 0
+    private_attempt_log: list[dict] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict) -> "GameState":

@@ -9,7 +9,7 @@ def _proposal(proposal_id: str) -> Proposal:
     return Proposal(
         proposal_id=proposal_id,
         acceptance_mode="all_or_nothing",
-        terms=[Term(type="purchase", item_id="A", quantity=1, unit_price=120)],
+        terms=[Term(type="purchase", item_id="A", quantity=1, unit_price=120, unit="piece")],
         conditions=[],
         decision_summary="Private seller note",
         original_prices={"A": 120},
@@ -45,7 +45,7 @@ def test_counteroffer():
     state = _run(
         engine,
         [Action("PROPOSE", first.proposal_id, first), Action("ACCEPT", counter.proposal_id)],
-        [Action("COUNTER", counter.proposal_id, counter)],
+        [Action("COUNTER", first.proposal_id, counter)],
     )
 
     assert state.outcome.status == "AGREEMENT"
@@ -71,8 +71,8 @@ def test_timeout():
     offers = [_proposal(f"offer-{number}") for number in range(1, 5)]
     state = _run(
         engine,
-        [Action("PROPOSE", "offer-1", offers[0]), Action("COUNTER", "offer-3", offers[2])],
-        [Action("COUNTER", "offer-2", offers[1]), Action("COUNTER", "offer-4", offers[3])],
+        [Action("PROPOSE", "offer-1", offers[0]), Action("COUNTER", "offer-2", offers[2])],
+        [Action("COUNTER", "offer-1", offers[1]), Action("COUNTER", "offer-3", offers[3])],
     )
 
     assert state.outcome.status == "MAX_ROUNDS"
