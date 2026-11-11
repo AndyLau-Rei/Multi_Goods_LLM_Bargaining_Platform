@@ -1,0 +1,19 @@
+{
+  "scenario_id": "shop-v1",
+  "max_rounds": 8,
+  "starting_role": "seller",
+  "catalog": [
+    {"id": "A", "type": "product", "unit": "piece", "seller_stock": 20},
+    {"id": "B", "type": "product", "unit": "piece", "seller_stock": 20}
+  ],
+  "private_profiles": {
+    "seller": {
+      "unit_cost": {"A": 70, "B": 35},
+      "minimum_unit_price": {"A": 80, "B": 40}
+    },
+    "buyer": {
+      "unit_value": {"A": 130, "B": 75},
+      "budget": 200
+    }
+  }
+}
