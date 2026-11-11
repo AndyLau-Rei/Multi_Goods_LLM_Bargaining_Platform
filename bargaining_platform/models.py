@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """Define the scenario configuration schema."""
 
 from math import isfinite
@@ -87,3 +88,6 @@ def validate_scenario(data: object) -> dict:
             _number(value, f"{location}.{item_id}")
     _number(buyer["budget"], "private_profiles.buyer.budget")
     return scenario
+=======
+"""Define action, offer, term, and game-state models."""
+>>>>>>> 477fb69f6db7b0d7c7aada3e78e36efc42d23150
