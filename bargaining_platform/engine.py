@@ -9,7 +9,12 @@ class NegotiationEngine:
         if scenario["starting_role"] != "seller":
             raise ValueError("Seller must start the negotiation")
         self.max_rounds = scenario["max_rounds"]
-        self.state = GameState(current_actor=scenario["starting_role"], round_number=1, catalog=scenario["catalog"])
+        self.state = GameState(
+            current_actor=scenario["starting_role"],
+            round_number=1,
+            catalog=scenario["catalog"],
+            private_profiles=scenario["private_profiles"],
+        )
         self.action_count = 0
 
     def step(self, action: Action, role: str | None = None) -> GameState | ValidationResult:

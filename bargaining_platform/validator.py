@@ -29,7 +29,7 @@ def validate_action(role: str, action: Action, state: GameState) -> ValidationRe
     if action.action_type == "ACCEPT":
         if action.proposal is not None:
             return ValidationResult(False, "INVALID_ACTION_SCHEMA", "ACCEPT cannot contain a proposal")
-        return ValidationResult(ok=True)
+        return _validate_hard_constraints(active, state)
 
     proposal = action.proposal
     if not isinstance(proposal, Proposal) or not isinstance(proposal.proposal_id, str) or not proposal.proposal_id:
@@ -73,6 +73,49 @@ def validate_action(role: str, action: Action, state: GameState) -> ValidationRe
             return ValidationResult(False, "INVALID_QUANTITY", "Required quantity must be a positive integer")
         if not _nonnegative_number(condition.discount_per_unit):
             return ValidationResult(False, "INVALID_CONDITION", "Discount must be non-negative and finite")
+    return _validate_hard_constraints(proposal, state)
+
+
+def _validate_hard_constraints(proposal: Proposal, state: GameState) -> ValidationResult:
+    catalog = {entry["id"]: entry for entry in state.catalog}
+
+    quantities: dict[str, int] = {}
+    for term in proposal.terms:
+        if not isinstance(term, Term):
+            return ValidationResult(False, "INVALID_TERM", "Term has an invalid schema")
+        if not isinstance(term.item_id, str) or term.item_id not in catalog:
+            return ValidationResult(False, "INVALID_ITEM_ID", "Item is not in the catalog")
+        if term.unit != catalog[term.item_id]["unit"]:
+            return ValidationResult(False, "INVALID_UNIT", "Unit does not match the catalog")
+        if type(term.quantity) is not int or term.quantity <= 0:
+            return ValidationResult(False, "INVALID_QUANTITY", "Quantity must be a positive integer")
+        if not _nonnegative_number(term.unit_price):
+            return ValidationResult(False, "INVALID_PRICE", "Unit price must be non-negative and finite")
+        quantities[term.item_id] = quantities.get(term.item_id, 0) + term.quantity
+    for item_id, quantity in quantities.items():
+        if quantity > catalog[item_id]["seller_stock"]:
+            return ValidationResult(False, "INSUFFICIENT_STOCK", "The requested quantity is unavailable")
+
+    minimum_prices = state.private_profiles["seller"]["minimum_unit_price"]
+    if (
+        not isinstance(proposal.original_prices, dict)
+        or not isinstance(proposal.effective_prices, dict)
+        or proposal.original_prices.keys() != quantities.keys()
+        or proposal.effective_prices.keys() != quantities.keys()
+    ):
+        return ValidationResult(False, "INVALID_PRICE", "The proposed price is invalid")
+    total = 0
+    for term in proposal.terms:
+        if (
+            proposal.original_prices.get(term.item_id) != term.unit_price
+            or proposal.effective_prices.get(term.item_id) != term.unit_price
+        ):
+            return ValidationResult(False, "INVALID_PRICE", "The proposed price is invalid")
+        if term.unit_price < minimum_prices[term.item_id]:
+            return ValidationResult(False, "PRICE_BELOW_FLOOR", "The proposed price is invalid")
+        total += term.quantity * term.unit_price
+    if total > state.private_profiles["buyer"]["budget"]:
+        return ValidationResult(False, "BUDGET_EXCEEDED", "The proposed total exceeds the allowed budget")
     return ValidationResult(ok=True)
 
 

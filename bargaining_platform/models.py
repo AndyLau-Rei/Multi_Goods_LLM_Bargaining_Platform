@@ -173,6 +173,7 @@ class GameState(_Serializable):
     public_transcript: list[dict] = field(default_factory=list)
     outcome: Outcome | None = None
     catalog: list[dict] = field(default_factory=list)
+    private_profiles: dict = field(default_factory=dict)
     invalid_attempts: int = 0
     private_attempt_log: list[dict] = field(default_factory=list)
 
