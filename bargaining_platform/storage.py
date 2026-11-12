@@ -26,6 +26,7 @@ class Event:
     validation_result: dict | None = None
     state_transition_summary: str | None = None
     private_decision_summary: str | None = None
+    metadata: dict | None = None
 
     def to_dict(self) -> dict:
         return json_safe(asdict(self))
@@ -51,6 +52,7 @@ class EventLogger:
         validation_result: dict | None = None,
         state_transition_summary: str | None = None,
         private_decision_summary: str | None = None,
+        metadata: dict | None = None,
     ) -> Event:
         event = Event(
             event_id=len(self._events) + 1,
@@ -62,6 +64,7 @@ class EventLogger:
             validation_result=json_safe(validation_result) if validation_result is not None else None,
             state_transition_summary=state_transition_summary,
             private_decision_summary=private_decision_summary,
+            metadata=json_safe(metadata) if metadata is not None else None,
         )
         self._events.append(event)
         return event
@@ -95,11 +98,15 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             validation_result_json TEXT,
             state_transition_summary TEXT,
             private_decision_summary TEXT,
+            metadata_json TEXT,
             PRIMARY KEY (run_id, event_id),
             FOREIGN KEY (run_id) REFERENCES runs(run_id)
         );
         """
     )
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+    if "metadata_json" not in columns:
+        connection.execute("ALTER TABLE events ADD COLUMN metadata_json TEXT")
 
 
 def save_run_to_sqlite(
@@ -140,8 +147,8 @@ def save_run_to_sqlite(
                 INSERT INTO events
                     (run_id, event_id, timestamp, event_type, actor,
                      raw_output_json, parsed_action_json, validation_result_json,
-                     state_transition_summary, private_decision_summary)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     state_transition_summary, private_decision_summary, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     (
@@ -159,6 +166,7 @@ def save_run_to_sqlite(
                         else None,
                         event.state_transition_summary,
                         event.private_decision_summary,
+                        _json_text(event.metadata) if event.metadata is not None else None,
                     )
                     for event in events
                 ),
@@ -202,6 +210,7 @@ def load_run_from_sqlite(
                 "validation_result": decode(row["validation_result_json"]),
                 "state_transition_summary": row["state_transition_summary"],
                 "private_decision_summary": row["private_decision_summary"],
+                "metadata": decode(row["metadata_json"]),
             }
             for row in event_rows
         ],
@@ -241,14 +250,15 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
     valid_actions = []
 
     for event in action_events:
-        if event["parsed_action"] is None:
-            continue
-        action_data = _restore_action_numbers(event["parsed_action"])
-        proposal = action_data.get("proposal")
-        if proposal is not None:
-            proposal.setdefault("decision_summary", "")
         try:
-            result = engine.step(Action.from_dict(action_data), role=event["actor"])
+            if event["parsed_action"] is None:
+                engine.step(event["raw_output"], role=event["actor"])
+            else:
+                action_data = _restore_action_numbers(event["parsed_action"])
+                proposal = action_data.get("proposal")
+                if proposal is not None:
+                    proposal.setdefault("decision_summary", "")
+                engine.step(Action.from_dict(action_data), role=event["actor"])
         except Exception as exc:
             raise ReplayDivergenceError(
                 f"Replay failed at event {event['event_id']}"
@@ -263,7 +273,7 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
         if replay_attempt.validation_result != event["validation_result"]:
             raise ReplayDivergenceError(f"Validation diverged at event {event['event_id']}")
         if replay_attempt.validation_result and replay_attempt.validation_result.get("ok"):
-            valid_actions.append((event, result))
+            valid_actions.append(event)
 
         if len(replay_events) and replay_events[-1].event_type == "STATE_TRANSITION":
             if transitions_seen >= len(transition_events):
@@ -282,7 +292,7 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
         raise ReplayDivergenceError("Final outcome diverged from stored outcome")
 
     expected_transcript = []
-    for event, _ in valid_actions:
+    for event in valid_actions:
         action = event["parsed_action"]
         public = dict(action)
         public["actor"] = event["actor"]
@@ -304,7 +314,7 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
                     raise ReplayDivergenceError("Public proposal diverged")
 
     proposal_events = [
-        event for event, _ in valid_actions
+        event for event in valid_actions
         if event["parsed_action"].get("action_type") in {"PROPOSE", "COUNTER"}
     ]
     if proposal_events:

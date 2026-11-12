@@ -91,7 +91,7 @@ class OpenAIAdapter(BaseLLMAdapter):
                 "type": "json_schema",
                 "json_schema": {
                     "name": "action",
-                    "strict": True,
+                    "strict": False,
                     "schema": action_schema,
                 },
             },

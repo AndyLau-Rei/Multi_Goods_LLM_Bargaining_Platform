@@ -25,7 +25,14 @@ class NegotiationEngine:
         self.action_count = 0
         self.event_logger = event_logger or EventLogger()
 
-    def step(self, action: Action | str, role: str | None = None) -> GameState | ValidationResult:
+    def step(
+        self,
+        action: Action | ValidationResult | str,
+        role: str | None = None,
+        *,
+        raw_output: str | None = None,
+        metadata: dict | None = None,
+    ) -> GameState | ValidationResult:
         state = self.state
         if state.outcome is not None:
             raise RuntimeError("Negotiation has ended")
@@ -33,12 +40,12 @@ class NegotiationEngine:
         actor = role if role is not None else (
             action.actor if isinstance(action, Action) and action.actor is not None else state.current_actor
         )
-        raw_output = action if isinstance(action, str) else None
-        if raw_output is not None:
+        if isinstance(action, str):
+            raw_output = action
             action = parse_action(raw_output, actor)
         result = action if isinstance(action, ValidationResult) else validate_action(actor, action, state)
         utility_metrics = None
-        if result.ok and action.action_type == "ACCEPT":
+        if result.ok and isinstance(action, Action) and action.action_type == "ACCEPT":
             result = validate_reservation_utilities(state.active_proposal, state)
             if result.ok:
                 utility_metrics = calculate_utilities(state.active_proposal, state)
@@ -53,10 +60,11 @@ class NegotiationEngine:
             parsed_action=parsed_action,
             validation_result=result.to_dict(),
             private_decision_summary=private_summary,
+            metadata=metadata,
         )
         state.private_attempt_log.append({
             "actor": actor,
-            "action": json_safe(action.to_dict()) if isinstance(action, Action) else repr(action),
+            "action": json_safe(action.to_dict()) if isinstance(action, Action) else raw_output,
             "validation": result.to_dict(),
         })
         if not result.ok:
