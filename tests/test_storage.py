@@ -1,6 +1,14 @@
+import json
+from decimal import Decimal
+
 from bargaining_platform.engine import NegotiationEngine
-from bargaining_platform.models import Action, Proposal, Term
+from bargaining_platform.models import Action, Condition, Proposal, Term, ValidationResult
 from bargaining_platform.scenario import load_scenario
+from bargaining_platform.storage import (
+    export_run_to_jsonl,
+    load_run_from_sqlite,
+    save_run_to_sqlite,
+)
 
 
 def _engine() -> NegotiationEngine:
@@ -67,3 +75,56 @@ def test_private_summary_isolation():
     assert "decision_summary" not in event.parsed_action["proposal"]
     assert "decision_summary" not in engine.state.public_transcript[0]["proposal"]
     assert "seller-only decision" not in str(engine.state.public_transcript)
+
+
+def test_sqlite_persistence(tmp_path):
+    engine = _engine()
+    proposal = _proposal()
+    engine.step(Action("PROPOSE", proposal.proposal_id, proposal))
+    engine.step(Action("ACCEPT", proposal.proposal_id))
+
+    database = tmp_path / "runs.db"
+    save_run_to_sqlite(
+        "run-1", load_scenario("scenarios/shop_bundle.json"), engine.state.outcome,
+        engine.event_logger.events, database,
+    )
+    saved = load_run_from_sqlite("run-1", database)
+
+    assert saved["outcome_status"] == "AGREEMENT"
+    assert len(saved["events"]) == len(engine.event_logger.events)
+    assert [event["event_id"] for event in saved["events"]] == [1, 2, 3, 4]
+    assert saved["events"][0]["parsed_action"]["proposal"]["terms"][0]["item_id"] == "A"
+
+
+def test_jsonl_export_preserves_details(tmp_path):
+    engine = _engine()
+    proposal = Proposal(
+        "bundle-1",
+        "all_or_nothing",
+        [
+            Term("purchase", "A", 1, 100, unit="piece"),
+            Term("purchase", "B", 1, 60, unit="piece"),
+        ],
+        [Condition("discount_if_item_in_bundle", "A", 0.5, "B", 1)],
+        "",
+        {"A": 100, "B": 60},
+        {"A": Decimal("99.5"), "B": 60},
+    )
+    engine.event_logger.append(
+        "ACTION_ATTEMPT",
+        "seller",
+        parsed_action={"proposal": proposal.to_dict()},
+        validation_result=ValidationResult(False, "CONDITION_NOT_SATISFIED", "invalid").to_dict(),
+    )
+
+    output = tmp_path / "run.jsonl"
+    export_run_to_jsonl("run-2", engine.event_logger.events, output)
+    records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+
+    record = records[-1]
+    assert record["run_id"] == "run-2"
+    assert record["parsed_action"]["proposal"]["conditions"][0]["type"] == (
+        "discount_if_item_in_bundle"
+    )
+    assert record["parsed_action"]["proposal"]["effective_prices"]["A"] == "99.5"
+    assert record["validation_result"]["error_code"] == "CONDITION_NOT_SATISFIED"
