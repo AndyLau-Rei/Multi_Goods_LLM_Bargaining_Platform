@@ -48,7 +48,7 @@ def test_condition_missing_required_item_is_rejected():
 
     result = engine.step(Action("PROPOSE", proposal.proposal_id, proposal))
 
-    assert result.error_code == "CONDITION_NOT_SATISFIED"
+    assert result.error_code == "CONDITION_REFERENCES_MISSING_ITEM"
     assert engine.state.active_proposal is None
     assert engine.state.public_transcript == []
 

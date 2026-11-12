@@ -32,7 +32,7 @@ def validate_action(role: str, action: Action, state: GameState) -> ValidationRe
         return ValidationResult(ok=True)
     if action.action_type == "ACCEPT":
         if action.proposal is not None:
-            return ValidationResult(False, "INVALID_ACTION_SCHEMA", "ACCEPT cannot contain a proposal")
+            return ValidationResult(False, "MUTATION_ON_ACCEPT", "ACCEPT must reference only the current proposal ID")
         constraints = _validate_hard_constraints(active, state)
         return constraints if not constraints.ok else _validate_reservations(active, state)
 
@@ -149,12 +149,18 @@ def calculate_effective_totals(proposal: Proposal, state: GameState) -> dict:
             or condition.required_item_id not in catalog_ids
         ):
             raise _ConditionError("INVALID_ITEM_ID", "Condition item is not in the catalog")
-        if condition.discounted_item_id not in quantities:
-            raise _ConditionError("CONDITION_NOT_SATISFIED", "The conditional offer requirements are not met")
         if type(condition.minimum_required_quantity) is not int or condition.minimum_required_quantity <= 0:
             raise _ConditionError("INVALID_QUANTITY", "Required quantity must be a positive integer")
         if not _nonnegative_number(condition.discount_per_unit):
             raise _ConditionError("INVALID_CONDITION", "Discount must be non-negative and finite")
+        if (
+            condition.discounted_item_id not in quantities
+            or condition.required_item_id not in quantities
+        ):
+            raise _ConditionError(
+                "CONDITION_REFERENCES_MISSING_ITEM",
+                "The condition must reference items in the proposal",
+            )
         if quantities.get(condition.required_item_id, 0) < condition.minimum_required_quantity:
             raise _ConditionError("CONDITION_NOT_SATISFIED", "The conditional offer requirements are not met")
         if max_discount is None or condition.discount_per_unit > max_discount:
