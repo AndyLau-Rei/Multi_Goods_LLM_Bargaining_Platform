@@ -64,18 +64,23 @@ def test_llm_metadata_logging(tmp_path):
     proposal = _proposal()
     proposal["proposal_id"] = "e2e-3"
     adapters = {
-        "seller": MockLLMAdapter([json.dumps({"action_type": "PROPOSE", "proposal_id": "e2e-3", "proposal": proposal})]),
+        "seller": MockLLMAdapter([
+            '{"bad_json": true}',
+            json.dumps({"action_type": "PROPOSE", "proposal_id": "e2e-3", "proposal": proposal}),
+        ]),
         "buyer": MockLLMAdapter([json.dumps({"action_type": "ACCEPT", "proposal_id": "e2e-3"})]),
     }
 
     engine = run_llm_negotiation(_scenario(), adapters, run_id="e2e-3", db_path=tmp_path / "runs.db")
 
     action_events = [event for event in engine.event_logger.events if event.event_type == "ACTION_ATTEMPT"]
-    assert action_events[0].raw_output
-    assert action_events[0].metadata["model_version"] == "mock"
-    assert action_events[0].metadata["prompt_tokens"] >= 1
-    assert action_events[0].metadata["completion_tokens"] >= 1
-    assert action_events[0].metadata["latency_ms"] >= 0
-    assert "PRIVATE CONSTRAINTS" in action_events[0].metadata["prompt"]
+    assert len(action_events) == 3
+    for event in action_events:
+        assert isinstance(event.raw_output, str) and event.raw_output
+        assert event.metadata["model_version"] == "mock"
+        assert event.metadata["prompt_tokens"] >= 1
+        assert event.metadata["completion_tokens"] >= 1
+        assert event.metadata["latency_ms"] >= 0
+        assert "PRIVATE CONSTRAINTS" in event.metadata["prompt"]
     saved = load_run_from_sqlite("e2e-3", tmp_path / "runs.db")
     assert saved["events"][0]["metadata"]["model_version"] == "mock"

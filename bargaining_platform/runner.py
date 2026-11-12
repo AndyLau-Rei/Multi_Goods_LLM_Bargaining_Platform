@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from copy import deepcopy
 from pathlib import Path
 
 from .engine import NegotiationEngine
@@ -17,8 +18,13 @@ def run_llm_negotiation(
     *,
     run_id: str | None = None,
     db_path: str | Path = DEFAULT_DB_PATH,
+    mock_demo: bool = False,
 ) -> NegotiationEngine:
     """Run role-scoped generation until a terminal outcome and persist the run."""
+    if mock_demo:
+        scenario = deepcopy(scenario)
+        for profile in scenario["private_profiles"].values():
+            profile["reservation_utility"] = 0
     engine = NegotiationEngine(scenario)
     run_id = run_id or f"run-{uuid.uuid4().hex}"
     engine.run_id = run_id
@@ -41,8 +47,19 @@ def run_llm_negotiation(
 
 def default_mock_adapters() -> dict[str, MockLLMAdapter]:
     """Return deterministic role queues for local, network-free demonstrations."""
-    proposal = {
-        "proposal_id": "mock-bundle",
+    standalone = {
+        "proposal_id": "mock-a",
+        "acceptance_mode": "all_or_nothing",
+        "terms": [
+            {"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"},
+        ],
+        "conditions": [],
+        "decision_summary": "",
+        "original_prices": {"A": 120},
+        "effective_prices": {"A": 120},
+    }
+    bundle = {
+        "proposal_id": "mock-a",
         "acceptance_mode": "all_or_nothing",
         "terms": [
             {"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"},
@@ -63,9 +80,13 @@ def default_mock_adapters() -> dict[str, MockLLMAdapter]:
     }
     return {
         "seller": MockLLMAdapter([
-            json.dumps({"action_type": "PROPOSE", "proposal_id": "mock-bundle", "proposal": proposal})
+            json.dumps({"action_type": "PROPOSE", "proposal_id": "mock-a", "proposal": standalone}),
+            json.dumps({"action_type": "COUNTER", "proposal_id": "mock-a", "proposal": bundle}),
         ]),
-        "buyer": MockLLMAdapter([json.dumps({"action_type": "WALK_AWAY"})]),
+        "buyer": MockLLMAdapter([
+            json.dumps({"action_type": "COUNTER", "proposal_id": "mock-a", "proposal": bundle}),
+            json.dumps({"action_type": "ACCEPT", "proposal_id": "mock-a"}),
+        ]),
     }
 
 

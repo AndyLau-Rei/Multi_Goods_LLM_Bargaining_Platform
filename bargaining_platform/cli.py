@@ -30,7 +30,11 @@ def main() -> int:
         adapter = OpenAIAdapter()
         adapters = {"seller": adapter, "buyer": adapter}
     try:
-        engine = run_llm_negotiation(scenario, adapters)
+        engine = run_llm_negotiation(
+            scenario,
+            adapters,
+            mock_demo=args.agent == "mock" or not os.getenv("LLM_API_KEY"),
+        )
     except (ValueError, RuntimeError) as exc:
         print(f"ERROR: {exc}")
         return 1

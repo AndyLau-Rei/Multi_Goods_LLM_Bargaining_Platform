@@ -180,6 +180,7 @@ def load_run_from_sqlite(
     """Read persisted run data for inspection; replay is intentionally out of scope."""
     with closing(sqlite3.connect(db_path)) as connection:
         connection.row_factory = sqlite3.Row
+        _create_schema(connection)
         run = connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
         if run is None:
             raise KeyError(f"Unknown run: {run_id}")
