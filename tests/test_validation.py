@@ -137,7 +137,7 @@ def test_acceptance_rejects_unmet_or_missing_reservation():
 
     result = engine.step(Action("ACCEPT", offer.proposal_id))
 
-    assert result.error_code == "RESERVATION_NOT_MET"
+    assert result.error_code == "RESERVATION_UTILITY_NOT_MET"
     assert "100" not in result.message and "150" not in result.message
     assert engine.state.outcome is None
 

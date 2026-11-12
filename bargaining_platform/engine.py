@@ -3,6 +3,7 @@
 from copy import deepcopy
 
 from .models import Action, GameState, Outcome, ValidationResult, json_safe
+from .utility import calculate_utilities, validate_reservation_utilities
 from .validator import calculate_effective_totals, validate_action
 
 
@@ -31,6 +32,11 @@ class NegotiationEngine:
             action.actor if isinstance(action, Action) and action.actor is not None else state.current_actor
         )
         result = validate_action(actor, action, state)
+        utility_metrics = None
+        if result.ok and action.action_type == "ACCEPT":
+            result = validate_reservation_utilities(state.active_proposal, state)
+            if result.ok:
+                utility_metrics = calculate_utilities(state.active_proposal, state)
         state.private_attempt_log.append({
             "actor": actor,
             "action": json_safe(action.to_dict()) if isinstance(action, Action) else repr(action),
@@ -61,7 +67,11 @@ class NegotiationEngine:
         if action.action_type in ("PROPOSE", "COUNTER"):
             state.active_proposal = stored_proposal
         elif action.action_type == "ACCEPT":
-            state.outcome = Outcome("AGREEMENT", state.active_proposal.proposal_id)
+            state.outcome = Outcome(
+                "AGREEMENT",
+                state.active_proposal.proposal_id,
+                utility_metrics,
+            )
         elif action.action_type == "WALK_AWAY":
             state.outcome = Outcome("NO_DEAL")
 

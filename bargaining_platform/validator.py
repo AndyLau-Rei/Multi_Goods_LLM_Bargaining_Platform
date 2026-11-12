@@ -1,7 +1,6 @@
 """Validate schemas, inventory, conditions, and hard bounds."""
 
 from decimal import Decimal, localcontext
-from fractions import Fraction
 from math import isfinite
 
 from .models import Action, Condition, GameState, Proposal, Term, ValidationResult
@@ -33,8 +32,7 @@ def validate_action(role: str, action: Action, state: GameState) -> ValidationRe
     if action.action_type == "ACCEPT":
         if action.proposal is not None:
             return ValidationResult(False, "MUTATION_ON_ACCEPT", "ACCEPT must reference only the current proposal ID")
-        constraints = _validate_hard_constraints(active, state)
-        return constraints if not constraints.ok else _validate_reservations(active, state)
+        return _validate_hard_constraints(active, state)
 
     proposal = action.proposal
     if not isinstance(proposal, Proposal) or not isinstance(proposal.proposal_id, str) or not proposal.proposal_id:
@@ -212,24 +210,6 @@ def calculate_effective_totals(proposal: Proposal, state: GameState) -> dict | V
         "effective_line_totals": effective_line_totals,
         "effective_total": _sum_money(effective_line_totals),
     }
-
-
-def _validate_reservations(proposal: Proposal, state: GameState) -> ValidationResult:
-    seller = state.private_profiles["seller"]
-    buyer = state.private_profiles["buyer"]
-    if ("reservation_utility" not in seller or "reservation_utility" not in buyer
-            or any(term.type != "purchase" for term in proposal.terms)):
-        return ValidationResult(False, "UTILITY_NOT_IMPLEMENTED", "Acceptance requirements cannot be checked")
-    seller_utility = Fraction(0)
-    buyer_utility = Fraction(0)
-    for term in proposal.terms:
-        price = Fraction(Decimal(str(proposal.effective_prices[term.item_id])))
-        seller_utility += term.quantity * (price - Fraction(Decimal(str(seller["unit_cost"][term.item_id]))))
-        buyer_utility += term.quantity * (Fraction(Decimal(str(buyer["unit_value"][term.item_id]))) - price)
-    if (seller_utility < Fraction(Decimal(str(seller["reservation_utility"])))
-            or buyer_utility < Fraction(Decimal(str(buyer["reservation_utility"])))):
-        return ValidationResult(False, "RESERVATION_NOT_MET", "The proposal does not meet acceptance requirements")
-    return ValidationResult(ok=True)
 
 
 def calculate_original_totals(proposal: Proposal, max_quantity: dict[str, int]) -> dict:

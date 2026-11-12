@@ -147,7 +147,7 @@ def validate_scenario(data: object) -> dict:
 
 class _Serializable:
     def to_dict(self) -> dict:
-        return asdict(self)
+        return json_safe(asdict(self))
 
     @classmethod
     def from_dict(cls, data: dict):
