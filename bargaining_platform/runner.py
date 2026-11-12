@@ -19,6 +19,7 @@ def run_llm_negotiation(
     run_id: str | None = None,
     db_path: str | Path = DEFAULT_DB_PATH,
     mock_demo: bool = False,
+    condition_id: str | None = None,
 ) -> NegotiationEngine:
     """Run role-scoped generation until a terminal outcome and persist the run."""
     if mock_demo:
@@ -41,7 +42,14 @@ def run_llm_negotiation(
             raw_output=generated.text,
             metadata={"prompt": prompt, **generated.metadata},
         )
-    save_run_to_sqlite(run_id, scenario, engine.state.outcome, engine.event_logger.events, db_path)
+    save_run_to_sqlite(
+        run_id,
+        scenario,
+        engine.state.outcome,
+        engine.event_logger.events,
+        db_path,
+        condition_id=condition_id,
+    )
     return engine
 
 

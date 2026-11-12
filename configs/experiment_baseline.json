@@ -1,0 +1,9 @@
+{
+  "repetitions": 2,
+  "scenario_path": "scenarios/shop_bundle.json",
+  "agent_type": "mock",
+  "variations": [
+    {"agent_type": "mock", "private_profiles": {"buyer": {"budget": 150}}},
+    {"agent_type": "mock", "private_profiles": {"buyer": {"budget": 200}}}
+  ]
+}

@@ -80,6 +80,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS runs (
             run_id TEXT PRIMARY KEY,
+            condition_id TEXT,
             scenario_id TEXT NOT NULL,
             max_rounds INTEGER NOT NULL,
             outcome_status TEXT,
@@ -104,6 +105,9 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         );
         """
     )
+    run_columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
+    if "condition_id" not in run_columns:
+        connection.execute("ALTER TABLE runs ADD COLUMN condition_id TEXT")
     columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
     if "metadata_json" not in columns:
         connection.execute("ALTER TABLE events ADD COLUMN metadata_json TEXT")
@@ -115,6 +119,8 @@ def save_run_to_sqlite(
     outcome: Outcome | dict | None,
     events: list[Event] | tuple[Event, ...],
     db_path: str | Path = DEFAULT_DB_PATH,
+    *,
+    condition_id: str | None = None,
 ) -> None:
     """Persist one completed run and its append-only event snapshot."""
     database = Path(db_path)
@@ -128,12 +134,13 @@ def save_run_to_sqlite(
             connection.execute(
                 """
                 INSERT INTO runs
-                    (run_id, scenario_id, max_rounds, outcome_status, created_at,
+                    (run_id, condition_id, scenario_id, max_rounds, outcome_status, created_at,
                      scenario_json, outcome_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
+                    condition_id,
                     scenario["scenario_id"],
                     scenario["max_rounds"],
                     outcome_data.get("status") if outcome_data else None,
@@ -193,6 +200,7 @@ def load_run_from_sqlite(
 
     return {
         "run_id": run["run_id"],
+        "condition_id": run["condition_id"],
         "scenario_id": run["scenario_id"],
         "max_rounds": run["max_rounds"],
         "outcome_status": run["outcome_status"],

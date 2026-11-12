@@ -2,13 +2,30 @@
 
 import argparse
 import os
+import sys
 
+from .experiments import ExperimentRunner
 from .model_adapter import OpenAIAdapter
 from .runner import default_mock_adapters, run_llm_negotiation
 from .scenario import load_scenario
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "experiment":
+        experiment_parser = argparse.ArgumentParser(prog="python -m bargaining_platform.cli experiment")
+        experiment_parser.add_argument("--config", required=True)
+        experiment_parser.add_argument("--db-path", default=None)
+        args = experiment_parser.parse_args(argv[1:])
+        try:
+            runner = ExperimentRunner(args.config, **({"db_path": args.db_path} if args.db_path else {}))
+            results = runner.run()
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"ERROR: {exc}")
+            return 1
+        print(f"Completed {len(results)} experiment runs")
+        return 0
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--agent", choices=("scripted", "llm", "mock"), default="scripted")
