@@ -1,5 +1,7 @@
 """Manage the negotiation turn state machine."""
 
+from copy import deepcopy
+
 from .models import Action, GameState, Outcome, ValidationResult
 from .validator import validate_action
 
@@ -15,6 +17,7 @@ class NegotiationEngine:
             catalog=scenario["catalog"],
             private_profiles=scenario["private_profiles"],
             max_rounds=scenario["max_rounds"],
+            legal_ranges=scenario["legal_ranges"],
         )
         self.action_count = 0
 
@@ -46,7 +49,7 @@ class NegotiationEngine:
         state.public_transcript.append(public_action)
 
         if action.action_type in ("PROPOSE", "COUNTER"):
-            state.active_proposal = action.proposal
+            state.active_proposal = deepcopy(action.proposal)
         elif action.action_type == "ACCEPT":
             state.outcome = Outcome("AGREEMENT", state.active_proposal.proposal_id)
         elif action.action_type == "WALK_AWAY":

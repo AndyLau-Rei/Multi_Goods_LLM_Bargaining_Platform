@@ -92,7 +92,7 @@ def test_acceptance_rechecks_hard_constraints():
     engine = _engine()
     offer = _proposal("offer-1")
     engine.step(Action("PROPOSE", offer.proposal_id, offer))
-    offer.terms[0].quantity = 21
+    engine.state.active_proposal.terms[0].quantity = 21
 
     result = engine.step(Action("ACCEPT", offer.proposal_id))
 

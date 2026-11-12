@@ -24,14 +24,22 @@ def _run(engine: NegotiationEngine, seller: list[Action], buyer: list[Action]):
     return engine.state
 
 
+def _engine_with_feasible_reservations() -> NegotiationEngine:
+    scenario = load_scenario("scenarios/shop_bundle.json")
+    scenario["private_profiles"]["seller"]["reservation_utility"] = 0
+    scenario["private_profiles"]["buyer"]["reservation_utility"] = 0
+    return NegotiationEngine(scenario)
+
+
 def test_agreement():
-    engine = NegotiationEngine(load_scenario("scenarios/shop_bundle.json"))
+    engine = _engine_with_feasible_reservations()
     offer = _proposal("offer-1")
     state = _run(engine, [Action("PROPOSE", offer.proposal_id, offer)], [Action("ACCEPT", offer.proposal_id)])
 
     assert state.outcome.status == "AGREEMENT"
     assert state.outcome.final_proposal_id == offer.proposal_id
-    assert state.active_proposal is offer
+    assert state.active_proposal == offer
+    assert state.active_proposal is not offer
     assert [entry["actor"] for entry in state.public_transcript] == ["seller", "buyer"]
     assert "decision_summary" not in state.public_transcript[0]["proposal"]
     with pytest.raises(RuntimeError, match="ended"):
@@ -39,7 +47,7 @@ def test_agreement():
 
 
 def test_counteroffer():
-    engine = NegotiationEngine(load_scenario("scenarios/shop_bundle.json"))
+    engine = _engine_with_feasible_reservations()
     first = _proposal("offer-1")
     counter = _proposal("offer-2")
     state = _run(
@@ -50,7 +58,8 @@ def test_counteroffer():
 
     assert state.outcome.status == "AGREEMENT"
     assert state.outcome.final_proposal_id == counter.proposal_id
-    assert state.active_proposal is counter
+    assert state.active_proposal == counter
+    assert state.active_proposal is not counter
     assert state.round_number == 2
     assert [entry["actor"] for entry in state.public_transcript] == ["seller", "buyer", "seller"]
 
@@ -77,5 +86,19 @@ def test_timeout():
 
     assert state.outcome.status == "MAX_ROUNDS"
     assert state.round_number == 2
-    assert state.active_proposal is offers[3]
+    assert state.active_proposal == offers[3]
+    assert state.active_proposal is not offers[3]
     assert len(state.public_transcript) == 4
+
+
+def test_offer_is_snapshotted_before_acceptance():
+    engine = _engine_with_feasible_reservations()
+    offer = _proposal("offer-1")
+    engine.step(Action("PROPOSE", offer.proposal_id, offer))
+    offer.terms[0].unit_price = 80
+
+    state = engine.step(Action("ACCEPT", offer.proposal_id))
+
+    assert state.outcome.status == "AGREEMENT"
+    assert engine.state.active_proposal.terms[0].unit_price == 120
+    assert engine.state.public_transcript[0]["proposal"]["terms"][0]["unit_price"] == 120

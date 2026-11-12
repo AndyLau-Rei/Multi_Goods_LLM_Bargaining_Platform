@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from bargaining_platform.engine import NegotiationEngine
 from bargaining_platform.models import Action, Proposal, Term
 from bargaining_platform.prompt_builder import make_private_view
@@ -69,3 +71,11 @@ def test_views_contain_detached_public_state_without_private_summary():
     assert state.catalog[0]["id"] == "A"
     assert state.active_proposal.proposal_id == "offer-1"
     assert state.public_transcript[0]["actor"] == "seller"
+
+
+def test_purchase_term_rejects_arbitrary_private_details():
+    with pytest.raises(TypeError):
+        Term("purchase", "A", 1, 120, details={"unit_cost": 70}, unit="piece")
+    with pytest.raises(TypeError):
+        Term.from_dict({"type": "purchase", "item_id": "A", "quantity": 1,
+                        "unit_price": 120, "unit": "piece", "details": {"unit_cost": 70}})

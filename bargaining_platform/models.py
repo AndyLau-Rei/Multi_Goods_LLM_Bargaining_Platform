@@ -2,7 +2,6 @@
 
 from dataclasses import asdict, dataclass, field
 from math import isfinite
-from typing import Any
 
 
 PUBLIC_KEYS = {
@@ -145,7 +144,6 @@ class Term(_Serializable):
     item_id: str | None = None
     quantity: int | float | None = None
     unit_price: int | float | None = None
-    details: dict[str, Any] = field(default_factory=dict)
     unit: str | None = None
 
 
@@ -216,6 +214,7 @@ class GameState(_Serializable):
     invalid_attempts: int = 0
     private_attempt_log: list[dict] = field(default_factory=list)
     max_rounds: int = 0
+    legal_ranges: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict) -> "GameState":

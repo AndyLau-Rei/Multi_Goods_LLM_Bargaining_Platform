@@ -1,7 +1,7 @@
 import copy
 
 from bargaining_platform.engine import NegotiationEngine
-from bargaining_platform.models import Action, Proposal, Term
+from bargaining_platform.models import Action, Condition, Proposal, Term
 from bargaining_platform.scenario import load_scenario
 
 
@@ -78,7 +78,8 @@ def test_retry_policy_allows_one_invalid_action():
     valid = engine.step(Action("PROPOSE", offer.proposal_id, offer))
 
     assert invalid.error_code == "WRONG_TURN"
-    assert valid.active_proposal is offer
+    assert valid.active_proposal == offer
+    assert valid.active_proposal is not offer
     assert valid.outcome is None
     assert valid.invalid_attempts == 0
     assert len(valid.public_transcript) == 1
@@ -96,3 +97,57 @@ def test_retry_exhaustion_terminates():
     assert engine.state.active_proposal is None
     assert engine.state.public_transcript == []
     assert len(engine.state.private_attempt_log) == 2
+
+
+def test_conditional_offer_is_rejected_until_supported():
+    engine = _engine()
+    offer = _proposal("offer-1")
+    offer.conditions = [Condition("discount_if_item_in_bundle", "A", 20, "B", 1)]
+
+    result = engine.step(Action("PROPOSE", offer.proposal_id, offer))
+
+    assert result.error_code == "CONDITIONS_NOT_SUPPORTED_YET"
+    assert engine.state.active_proposal is None
+    assert engine.state.public_transcript == []
+
+    plain_offer = _proposal("offer-2")
+    engine.step(Action("PROPOSE", plain_offer.proposal_id, plain_offer))
+    engine.state.active_proposal.conditions = offer.conditions
+    result = engine.step(Action("ACCEPT", plain_offer.proposal_id))
+    assert result.error_code == "CONDITIONS_NOT_SUPPORTED_YET"
+    assert engine.state.outcome is None
+
+
+def test_action_must_be_allowed_for_role():
+    scenario = load_scenario("scenarios/shop_bundle.json")
+    scenario["private_profiles"]["seller"]["allowed_actions"] = ["PROPOSE"]
+    engine = NegotiationEngine(scenario)
+    first = _proposal("offer-1")
+    second = _proposal("offer-2")
+    third = _proposal("offer-3")
+    engine.step(Action("PROPOSE", first.proposal_id, first))
+    engine.step(Action("COUNTER", first.proposal_id, second))
+
+    result = engine.step(Action("COUNTER", second.proposal_id, third))
+
+    assert result.error_code == "ACTION_NOT_ALLOWED"
+    assert engine.state.active_proposal == second
+    assert engine.state.current_actor == "seller"
+
+
+def test_acceptance_rejects_unmet_or_missing_reservation():
+    engine = _engine()
+    offer = _proposal("offer-1")
+    engine.step(Action("PROPOSE", offer.proposal_id, offer))
+
+    result = engine.step(Action("ACCEPT", offer.proposal_id))
+
+    assert result.error_code == "RESERVATION_NOT_MET"
+    assert "100" not in result.message and "150" not in result.message
+    assert engine.state.outcome is None
+
+    engine = _engine()
+    engine.step(Action("PROPOSE", offer.proposal_id, offer))
+    del engine.state.private_profiles["buyer"]["reservation_utility"]
+    result = engine.step(Action("ACCEPT", offer.proposal_id))
+    assert result.error_code == "UTILITY_NOT_IMPLEMENTED"
