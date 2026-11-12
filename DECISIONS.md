@@ -33,3 +33,12 @@
 
 - **JSON Money Serialization**: Because Python's `Decimal` is not JSON serializable, all financial amounts are serialized as `str` in JSON transcripts and exports via `MoneyJSONEncoder`, preserving exact precision.
 - **Defensive Pure Functions**: Helper functions in `validator.py` perform structural checks on incoming terms before arithmetic and return controlled errors rather than raising unhandled exceptions.
+
+### Phase 3 Decisions (Utility, Storage, and Replay)
+
+- **Exact Utility Math**: Utility calculations must NEVER use floating-point arithmetic. Use `Fraction(Decimal(...))` to guarantee exact precision for buyer/seller/joint utilities, converting back to `Decimal` only at the final step.
+- **Reservation Enforcement**: The engine must reject the final acceptance if either party's computed utility falls below their configured `reservation_utility`. Use the exact error code `RESERVATION_UTILITY_NOT_MET`.
+- **Immutable Event Logging**: The `Event` dataclass is strictly immutable (`frozen=True`). The `EventLogger` must return a `tuple` of events, preventing external mutation. All logged structured data must pass through `json_safe()` before being stored.
+- **Complete Run Persistence**: To enable deterministic replay, the `runs` table in SQLite MUST store the complete `scenario_json` alongside the run metadata and outcomes.
+- **Deterministic Replay & Tamper Detection**: Replay must reconstruct the exact game state by reading the database action log, bypassing all LLMs/agents. It must throw `ReplayDivergenceError` if any state, effective price, or utility diverges from the original record.
+- **JSONL Export Format**: JSONL exports must preserve exact Decimal precision (as strings) and explicitly use `newline="\n"` to ensure cross-platform compatibility.
