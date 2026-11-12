@@ -5,7 +5,7 @@ from copy import deepcopy
 from .models import Action, GameState, Outcome, ValidationResult, json_safe
 from .storage import EventLogger
 from .utility import calculate_utilities, validate_reservation_utilities
-from .validator import calculate_effective_totals, validate_action
+from .validator import calculate_effective_totals, parse_action, validate_action
 
 
 class NegotiationEngine:
@@ -25,7 +25,7 @@ class NegotiationEngine:
         self.action_count = 0
         self.event_logger = event_logger or EventLogger()
 
-    def step(self, action: Action, role: str | None = None) -> GameState | ValidationResult:
+    def step(self, action: Action | str, role: str | None = None) -> GameState | ValidationResult:
         state = self.state
         if state.outcome is not None:
             raise RuntimeError("Negotiation has ended")
@@ -33,19 +33,23 @@ class NegotiationEngine:
         actor = role if role is not None else (
             action.actor if isinstance(action, Action) and action.actor is not None else state.current_actor
         )
-        result = validate_action(actor, action, state)
+        raw_output = action if isinstance(action, str) else None
+        if raw_output is not None:
+            action = parse_action(raw_output, actor)
+        result = action if isinstance(action, ValidationResult) else validate_action(actor, action, state)
         utility_metrics = None
         if result.ok and action.action_type == "ACCEPT":
             result = validate_reservation_utilities(state.active_proposal, state)
             if result.ok:
                 utility_metrics = calculate_utilities(state.active_proposal, state)
-        parsed_action = json_safe(action.to_dict()) if isinstance(action, Action) else {"raw": repr(action)}
+        parsed_action = json_safe(action.to_dict()) if isinstance(action, Action) else None
         private_summary = None
-        if isinstance(parsed_action.get("proposal"), dict):
+        if isinstance(parsed_action, dict) and isinstance(parsed_action.get("proposal"), dict):
             private_summary = parsed_action["proposal"].pop("decision_summary", None)
         self.event_logger.append(
             "ACTION_ATTEMPT",
             actor,
+            raw_output=raw_output,
             parsed_action=parsed_action,
             validation_result=result.to_dict(),
             private_decision_summary=private_summary,

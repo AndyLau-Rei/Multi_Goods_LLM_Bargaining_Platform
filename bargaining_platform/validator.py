@@ -1,9 +1,137 @@
-"""Validate schemas, inventory, conditions, and hard bounds."""
+"""Parse actions and validate schemas, inventory, conditions, and hard bounds."""
 
+import json
+import re
 from decimal import Decimal, localcontext
 from math import isfinite
 
-from .models import Action, Condition, GameState, Proposal, Term, ValidationResult
+from .models import ACTION_TYPES, Action, Condition, GameState, Proposal, Term, ValidationResult
+
+
+_ACTION_KEYS = {"action_type", "proposal_id", "proposal"}
+_PROPOSAL_KEYS = {
+    "proposal_id",
+    "acceptance_mode",
+    "terms",
+    "conditions",
+    "decision_summary",
+    "original_prices",
+    "effective_prices",
+}
+_TERM_KEYS = {"type", "item_id", "quantity", "unit_price", "unit"}
+_CONDITION_KEYS = {
+    "type",
+    "discounted_item_id",
+    "discount_per_unit",
+    "required_item_id",
+    "minimum_required_quantity",
+}
+
+
+def parse_action(raw_text: str, role: str) -> Action | ValidationResult:
+    """Parse one raw model response without performing negotiation validation.
+
+    The caller retains ``raw_text`` for event logging alongside any returned
+    ``ValidationResult``; this function never raises JSON or schema exceptions.
+    """
+    if role not in {"seller", "buyer"}:
+        return ValidationResult(False, "SCHEMA_VIOLATION", "Unknown acting role")
+    if not isinstance(raw_text, str):
+        return ValidationResult(False, "MALFORMED_JSON", "Model output must be text")
+    text = raw_text.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.IGNORECASE | re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+        return ValidationResult(False, "MALFORMED_JSON", "Model output is not valid JSON")
+    if not isinstance(data, dict):
+        return ValidationResult(False, "SCHEMA_VIOLATION", "Action must be a JSON object")
+
+    violation = _validate_action_shape(data)
+    if violation is not None:
+        return violation
+    action_data = dict(data)
+    if action_data.get("proposal") is not None:
+        proposal_violation = _validate_proposal_shape(action_data["proposal"])
+        if proposal_violation is not None:
+            return proposal_violation
+    action_data["actor"] = role
+    try:
+        return Action.from_dict(action_data)
+    except (KeyError, TypeError, ValueError):
+        return ValidationResult(False, "SCHEMA_VIOLATION", "Action fields have invalid types")
+
+
+def _validate_action_shape(data: dict) -> ValidationResult | None:
+    if set(data) - _ACTION_KEYS:
+        return ValidationResult(False, "SCHEMA_VIOLATION", "Action contains unexpected fields")
+    if not isinstance(data.get("action_type"), str) or data["action_type"] not in ACTION_TYPES:
+        return ValidationResult(False, "SCHEMA_VIOLATION", "Action type is required and unsupported")
+    action_type = data["action_type"]
+    proposal_id = data.get("proposal_id")
+    if action_type in {"PROPOSE", "COUNTER", "ACCEPT"}:
+        if not isinstance(proposal_id, str) or not proposal_id:
+            return ValidationResult(False, "SCHEMA_VIOLATION", "A proposal_id is required")
+    elif proposal_id is not None and (not isinstance(proposal_id, str) or not proposal_id):
+        return ValidationResult(False, "SCHEMA_VIOLATION", "proposal_id must be a string or null")
+
+    proposal = data.get("proposal")
+    if action_type in {"PROPOSE", "COUNTER"}:
+        if not isinstance(proposal, dict):
+            return ValidationResult(False, "SCHEMA_VIOLATION", "A proposal is required")
+        if proposal.get("proposal_id") != proposal_id:
+            return ValidationResult(False, "SCHEMA_VIOLATION", "Proposal IDs must match")
+    elif proposal is not None:
+        return ValidationResult(False, "SCHEMA_VIOLATION", "This action cannot contain a proposal")
+    return None
+
+
+def _validate_proposal_shape(proposal: dict) -> ValidationResult | None:
+    if set(proposal) != _PROPOSAL_KEYS:
+        return ValidationResult(False, "SCHEMA_VIOLATION", "Proposal fields are incomplete or unexpected")
+    if not isinstance(proposal["proposal_id"], str) or not proposal["proposal_id"]:
+        return ValidationResult(False, "SCHEMA_VIOLATION", "Proposal ID must be a non-empty string")
+    if not isinstance(proposal["acceptance_mode"], str):
+        return ValidationResult(False, "SCHEMA_VIOLATION", "Acceptance mode must be text")
+    if not isinstance(proposal["decision_summary"], str):
+        return ValidationResult(False, "SCHEMA_VIOLATION", "Decision summary must be text")
+    if not isinstance(proposal["terms"], list) or not proposal["terms"]:
+        return ValidationResult(False, "SCHEMA_VIOLATION", "Proposal terms must be a non-empty list")
+    if not isinstance(proposal["conditions"], list):
+        return ValidationResult(False, "SCHEMA_VIOLATION", "Proposal conditions must be a list")
+    for term in proposal["terms"]:
+        if not isinstance(term, dict) or set(term) != _TERM_KEYS:
+            return ValidationResult(False, "SCHEMA_VIOLATION", "Term fields are incomplete or unexpected")
+        if not isinstance(term["type"], str) or not isinstance(term["item_id"], str):
+            return ValidationResult(False, "SCHEMA_VIOLATION", "Term identifiers must be text")
+        if not _json_number(term["quantity"]) or not _json_number(term["unit_price"]):
+            return ValidationResult(False, "SCHEMA_VIOLATION", "Term numeric fields are invalid")
+        if not isinstance(term["unit"], str):
+            return ValidationResult(False, "SCHEMA_VIOLATION", "Term unit must be text")
+    for condition in proposal["conditions"]:
+        if not isinstance(condition, dict) or set(condition) != _CONDITION_KEYS:
+            return ValidationResult(False, "SCHEMA_VIOLATION", "Condition fields are incomplete or unexpected")
+        if not isinstance(condition["type"], str):
+            return ValidationResult(False, "SCHEMA_VIOLATION", "Condition type must be text")
+        if not isinstance(condition["discounted_item_id"], str) or not isinstance(condition["required_item_id"], str):
+            return ValidationResult(False, "SCHEMA_VIOLATION", "Condition item IDs must be text")
+        if not _json_number(condition["discount_per_unit"]) or not _json_number(condition["minimum_required_quantity"]):
+            return ValidationResult(False, "SCHEMA_VIOLATION", "Condition numeric fields are invalid")
+    for prices in (proposal["original_prices"], proposal["effective_prices"]):
+        if not isinstance(prices, dict) or any(
+            not isinstance(item_id, str) or not _json_number(price)
+            for item_id, price in prices.items()
+        ):
+            return ValidationResult(False, "SCHEMA_VIOLATION", "Proposal prices are invalid")
+    return None
+
+
+def _json_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and (
+        not isinstance(value, float) or isfinite(value)
+    )
 
 
 def validate_action(role: str, action: Action, state: GameState) -> ValidationResult:
