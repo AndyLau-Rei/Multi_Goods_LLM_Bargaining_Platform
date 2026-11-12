@@ -3,7 +3,7 @@
 from copy import deepcopy
 
 from .models import Action, GameState, Outcome, ValidationResult
-from .validator import validate_action
+from .validator import calculate_effective_totals, validate_action
 
 
 class NegotiationEngine:
@@ -18,6 +18,7 @@ class NegotiationEngine:
             private_profiles=scenario["private_profiles"],
             max_rounds=scenario["max_rounds"],
             legal_ranges=scenario["legal_ranges"],
+            bundle_rules=scenario["bundle_rules"],
         )
         self.action_count = 0
 
@@ -42,14 +43,23 @@ class NegotiationEngine:
             return result
         state.invalid_attempts = 0
 
+        stored_proposal = None
+        if action.action_type in ("PROPOSE", "COUNTER"):
+            stored_proposal = deepcopy(action.proposal)
+            stored_proposal.effective_prices = calculate_effective_totals(
+                stored_proposal, state
+            )["effective_prices"]
+
         public_action = action.to_dict()
+        if stored_proposal is not None:
+            public_action["proposal"] = stored_proposal.to_dict()
         if public_action["proposal"] is not None:
             public_action["proposal"].pop("decision_summary", None)
         public_action["actor"] = actor
         state.public_transcript.append(public_action)
 
         if action.action_type in ("PROPOSE", "COUNTER"):
-            state.active_proposal = deepcopy(action.proposal)
+            state.active_proposal = stored_proposal
         elif action.action_type == "ACCEPT":
             state.outcome = Outcome("AGREEMENT", state.active_proposal.proposal_id)
         elif action.action_type == "WALK_AWAY":

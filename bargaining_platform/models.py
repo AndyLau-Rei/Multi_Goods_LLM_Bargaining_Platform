@@ -215,6 +215,7 @@ class GameState(_Serializable):
     private_attempt_log: list[dict] = field(default_factory=list)
     max_rounds: int = 0
     legal_ranges: dict = field(default_factory=dict)
+    bundle_rules: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict) -> "GameState":

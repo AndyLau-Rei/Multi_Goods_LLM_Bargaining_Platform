@@ -99,23 +99,18 @@ def test_retry_exhaustion_terminates():
     assert len(engine.state.private_attempt_log) == 2
 
 
-def test_conditional_offer_is_rejected_until_supported():
+def test_conditional_offer_is_supported():
     engine = _engine()
     offer = _proposal("offer-1")
+    offer.terms.append(Term("purchase", "B", 1, 60, unit="piece"))
+    offer.original_prices["B"] = 60
+    offer.effective_prices["B"] = 60
     offer.conditions = [Condition("discount_if_item_in_bundle", "A", 20, "B", 1)]
 
-    result = engine.step(Action("PROPOSE", offer.proposal_id, offer))
+    state = engine.step(Action("PROPOSE", offer.proposal_id, offer))
 
-    assert result.error_code == "CONDITIONS_NOT_SUPPORTED_YET"
-    assert engine.state.active_proposal is None
-    assert engine.state.public_transcript == []
-
-    plain_offer = _proposal("offer-2")
-    engine.step(Action("PROPOSE", plain_offer.proposal_id, plain_offer))
-    engine.state.active_proposal.conditions = offer.conditions
-    result = engine.step(Action("ACCEPT", plain_offer.proposal_id))
-    assert result.error_code == "CONDITIONS_NOT_SUPPORTED_YET"
-    assert engine.state.outcome is None
+    assert state.active_proposal.effective_prices == {"A": 100, "B": 60}
+    assert state.public_transcript[0]["proposal"]["effective_prices"] == {"A": 100, "B": 60}
 
 
 def test_action_must_be_allowed_for_role():

@@ -4,7 +4,7 @@ from decimal import Decimal, localcontext
 from fractions import Fraction
 from math import isfinite
 
-from .models import Action, GameState, Proposal, Term, ValidationResult
+from .models import Action, Condition, GameState, Proposal, Term, ValidationResult
 
 
 def validate_action(role: str, action: Action, state: GameState) -> ValidationResult:
@@ -33,8 +33,6 @@ def validate_action(role: str, action: Action, state: GameState) -> ValidationRe
     if action.action_type == "ACCEPT":
         if action.proposal is not None:
             return ValidationResult(False, "INVALID_ACTION_SCHEMA", "ACCEPT cannot contain a proposal")
-        if active.conditions:
-            return ValidationResult(False, "CONDITIONS_NOT_SUPPORTED_YET", "Conditional offers are not supported yet")
         constraints = _validate_hard_constraints(active, state)
         return constraints if not constraints.ok else _validate_reservations(active, state)
 
@@ -47,8 +45,6 @@ def validate_action(role: str, action: Action, state: GameState) -> ValidationRe
         return ValidationResult(False, "INVALID_PROPOSAL", "A complete all-or-nothing proposal is required")
     if not isinstance(proposal.conditions, list):
         return ValidationResult(False, "INVALID_CONDITION", "Conditions must be a list")
-    if proposal.conditions:
-        return ValidationResult(False, "CONDITIONS_NOT_SUPPORTED_YET", "Conditional offers are not supported yet")
 
     catalog = {entry["id"]: entry for entry in state.catalog}
     for term in proposal.terms:
@@ -65,6 +61,13 @@ def validate_action(role: str, action: Action, state: GameState) -> ValidationRe
             return ValidationResult(False, "INVALID_QUANTITY", "Quantity must be a positive integer")
         if not _nonnegative_number(term.unit_price):
             return ValidationResult(False, "INVALID_PRICE", "Unit price must be non-negative and finite")
+
+    try:
+        calculate_effective_totals(proposal, state)
+    except _ConditionError as exc:
+        if exc.code == "DISCOUNT_BELOW_FLOOR" and not proposal.conditions:
+            return ValidationResult(False, "PRICE_BELOW_FLOOR", "The proposed price is invalid")
+        return ValidationResult(False, exc.code, exc.message)
 
     return _validate_hard_constraints(proposal, state)
 
@@ -89,29 +92,98 @@ def _validate_hard_constraints(proposal: Proposal, state: GameState) -> Validati
         if quantity > catalog[item_id]["seller_stock"]:
             return ValidationResult(False, "INSUFFICIENT_STOCK", "The requested quantity is unavailable")
 
-    minimum_prices = state.private_profiles["seller"]["minimum_unit_price"]
-    if (
-        not isinstance(proposal.original_prices, dict)
-        or not isinstance(proposal.effective_prices, dict)
-        or proposal.original_prices.keys() != quantities.keys()
-        or proposal.effective_prices.keys() != quantities.keys()
-    ):
+    if not isinstance(proposal.original_prices, dict) or proposal.original_prices.keys() != quantities.keys():
         return ValidationResult(False, "INVALID_PRICE", "The proposed price is invalid")
     for term in proposal.terms:
-        if (
-            proposal.original_prices.get(term.item_id) != term.unit_price
-            or proposal.effective_prices.get(term.item_id) != term.unit_price
-        ):
+        if proposal.original_prices.get(term.item_id) != term.unit_price:
             return ValidationResult(False, "INVALID_PRICE", "The proposed price is invalid")
-        if term.unit_price < minimum_prices[term.item_id]:
+    try:
+        totals = calculate_effective_totals(proposal, state)
+    except _ConditionError as exc:
+        if exc.code == "DISCOUNT_BELOW_FLOOR" and not proposal.conditions:
+            return ValidationResult(False, "PRICE_BELOW_FLOOR", "The proposed price is invalid")
+        return ValidationResult(False, exc.code, exc.message)
+    if not proposal.conditions and (
+        not isinstance(proposal.effective_prices, dict)
+        or proposal.effective_prices != totals["effective_prices"]
+    ):
+        return ValidationResult(False, "INVALID_PRICE", "The proposed price is invalid")
+    for item_id, effective_price in totals["effective_prices"].items():
+        if effective_price < state.private_profiles["seller"]["minimum_unit_price"][item_id]:
             return ValidationResult(False, "PRICE_BELOW_FLOOR", "The proposed price is invalid")
     try:
-        totals = calculate_original_totals(proposal, state.legal_ranges["max_quantity"])
+        calculate_original_totals(proposal, state.legal_ranges["max_quantity"])
     except ValueError:
         return ValidationResult(False, "QUANTITY_LIMIT_EXCEEDED", "The requested quantity is not permitted")
-    if totals["original_total"] > Decimal(str(state.private_profiles["buyer"]["budget"])):
+    if totals["effective_total"] > Decimal(str(state.private_profiles["buyer"]["budget"])):
         return ValidationResult(False, "BUDGET_EXCEEDED", "The proposed total exceeds the allowed budget")
     return ValidationResult(ok=True)
+
+
+class _ConditionError(ValueError):
+    def __init__(self, code: str, message: str):
+        self.code = code
+        self.message = message
+
+
+def calculate_effective_totals(proposal: Proposal, state: GameState) -> dict:
+    """Evaluate typed bundle conditions and return original and effective totals."""
+    quantities: dict[str, int] = {}
+    original_prices: dict[str, int | float] = {}
+    for term in proposal.terms:
+        quantities[term.item_id] = quantities.get(term.item_id, 0) + term.quantity
+        if term.item_id in original_prices and original_prices[term.item_id] != term.unit_price:
+            raise _ConditionError("INVALID_PRICE", "The proposed price is invalid")
+        original_prices[term.item_id] = term.unit_price
+
+    discounts: dict[str, int | float] = {}
+    catalog_ids = {entry["id"] for entry in state.catalog}
+    max_discount = state.bundle_rules.get("max_discount_per_unit")
+    for condition in proposal.conditions:
+        if not isinstance(condition, Condition) or condition.type != "discount_if_item_in_bundle":
+            raise _ConditionError("INVALID_CONDITION", "Condition type is not permitted")
+        if (
+            not isinstance(condition.discounted_item_id, str)
+            or not isinstance(condition.required_item_id, str)
+            or condition.discounted_item_id not in catalog_ids
+            or condition.required_item_id not in catalog_ids
+        ):
+            raise _ConditionError("INVALID_ITEM_ID", "Condition item is not in the catalog")
+        if condition.discounted_item_id not in quantities:
+            raise _ConditionError("CONDITION_NOT_SATISFIED", "The conditional offer requirements are not met")
+        if type(condition.minimum_required_quantity) is not int or condition.minimum_required_quantity <= 0:
+            raise _ConditionError("INVALID_QUANTITY", "Required quantity must be a positive integer")
+        if not _nonnegative_number(condition.discount_per_unit):
+            raise _ConditionError("INVALID_CONDITION", "Discount must be non-negative and finite")
+        if quantities.get(condition.required_item_id, 0) < condition.minimum_required_quantity:
+            raise _ConditionError("CONDITION_NOT_SATISFIED", "The conditional offer requirements are not met")
+        if max_discount is None or condition.discount_per_unit > max_discount:
+            raise _ConditionError("DISCOUNT_EXCEEDS_CAP", "The proposed discount is not permitted")
+        discounts[condition.discounted_item_id] = _add_money(
+            discounts.get(condition.discounted_item_id, 0), condition.discount_per_unit
+        )
+        if discounts[condition.discounted_item_id] > max_discount:
+            raise _ConditionError("DISCOUNT_EXCEEDS_CAP", "The proposed discount is not permitted")
+
+    effective_prices = {
+        item_id: _subtract_money(price, discounts.get(item_id, 0))
+        for item_id, price in original_prices.items()
+    }
+    floors = state.private_profiles["seller"]["minimum_unit_price"]
+    for item_id, effective_price in effective_prices.items():
+        if effective_price < floors[item_id]:
+            raise _ConditionError("DISCOUNT_BELOW_FLOOR", "The proposed discount is not permitted")
+
+    original_line_totals = [_multiply_money(term.quantity, term.unit_price) for term in proposal.terms]
+    effective_line_totals = [_multiply_money(term.quantity, effective_prices[term.item_id]) for term in proposal.terms]
+    return {
+        "original_prices": original_prices,
+        "effective_prices": effective_prices,
+        "original_line_totals": original_line_totals,
+        "original_total": _sum_money(original_line_totals),
+        "effective_line_totals": effective_line_totals,
+        "effective_total": _sum_money(effective_line_totals),
+    }
 
 
 def _validate_reservations(proposal: Proposal, state: GameState) -> ValidationResult:
@@ -165,4 +237,43 @@ def calculate_original_totals(proposal: Proposal, max_quantity: dict[str, int]) 
 def _nonnegative_number(value: object) -> bool:
     return (type(value) is int and value >= 0) or (
         type(value) is float and isfinite(value) and value >= 0
+    )
+
+
+def _add_money(left: int | float, right: int | float):
+    if type(left) is int and type(right) is int:
+        return left + right
+    with localcontext() as context:
+        context.prec = _money_precision((left, right))
+        return Decimal(str(left)) + Decimal(str(right))
+
+
+def _subtract_money(left: int | float, right: int | float):
+    if type(left) is int and type(right) is int:
+        return left - right
+    with localcontext() as context:
+        context.prec = _money_precision((left, right))
+        return Decimal(str(left)) - Decimal(str(right))
+
+
+def _multiply_money(quantity: int, price: int | float | Decimal):
+    if type(price) is int:
+        return quantity * price
+    with localcontext() as context:
+        context.prec = _money_precision((price,)) + len(str(quantity))
+        return Decimal(str(price)) * quantity
+
+
+def _sum_money(values: list):
+    if all(type(value) is int for value in values):
+        return sum(values, 0)
+    with localcontext() as context:
+        context.prec = _money_precision(values) + len(values) + 1
+        return sum((Decimal(str(value)) for value in values), Decimal(0))
+
+
+def _money_precision(values) -> int:
+    return max(
+        28,
+        max((len(str(value).replace(".", "").lstrip("-")) for value in values), default=1) + 2,
     )

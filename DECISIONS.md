@@ -25,6 +25,6 @@
 
 - **Strict Term Schema**: `Term` no longer accepts an arbitrary `details` dict. Only declared typed fields are accepted, and action validation checks them before a proposal becomes public to prevent privacy leaks.
 - **Immutable Proposals**: The engine uses `copy.deepcopy()` when storing a validated proposal, so acceptance commits the stored snapshot rather than a caller-owned object that can change later.
-- **Fail-Fast on Conditions**: Until T-202 is implemented, reject any proposal containing a condition. Do not accept a conditional discount without calculating and validating it.
+- **Fail-Fast on Conditions**: Before T-202, proposals containing conditions were rejected. T-202 now evaluates typed conditions and rejects any discount that cannot be calculated, exceeds the scenario cap, or violates the seller floor.
 - **Action Permissions & Utilities**: Enforce each role's `allowed_actions` in the validator. At acceptance, the temporary purchase-only reservation check fails closed when utility cannot be checked; T-301 owns full utility calculation and metrics.
 - **Exact Integer Math**: Prefer native Python `int` for integer-priced totals to avoid `Decimal` precision limits. Decimal-priced totals use an explicitly sized local `Decimal` context; do not rely on its default precision.
