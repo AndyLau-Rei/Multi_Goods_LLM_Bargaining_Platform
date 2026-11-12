@@ -42,3 +42,12 @@
 - **Complete Run Persistence**: To enable deterministic replay, the `runs` table in SQLite MUST store the complete `scenario_json` alongside the run metadata and outcomes.
 - **Deterministic Replay & Tamper Detection**: Replay must reconstruct the exact game state by reading the database action log, bypassing all LLMs/agents. It must throw `ReplayDivergenceError` if any state, effective price, or utility diverges from the original record.
 - **JSONL Export Format**: JSONL exports must preserve exact Decimal precision (as strings) and explicitly use `newline="\n"` to ensure cross-platform compatibility.
+
+### Phase 4 Decisions (LLM Integration)
+
+- **Runner Isolation**: The end-to-end agent loop is orchestrated in `runner.py`, which chains `make_private_view -> render_prompt -> adapter.generate -> parse_action -> engine.step`. The engine remains completely agnostic to LLM implementations.
+- **Deterministic Fallback & Mock Demo**: The CLI supports `--agent {scripted, llm, mock}`. If `LLM_API_KEY` is missing, the runner defaults to `MockLLMAdapter`. The mock demo uses an in-memory copy of the scenario with `reservation_utility` set to 0 to guarantee a happy-path `AGREEMENT` demonstration without mutating the base scenario file.
+- **Metadata Logging**: Every LLM generation must log prompt text, model version, token usage, latency, and raw output into the EventLogger, without mutating the public transcript.
+- **Parser Failure Handling**: Malformed LLM outputs are caught by `parse_action` and routed through the existing T-102 retry counter. No separate retry loop is allowed.
+- **Database Schema Migration**: To support new columns (like `metadata_json`) while maintaining backward compatibility, schema migration (`_create_schema`) MUST be executed before reading persisted runs, ensuring pre-T-404 databases can still be replayed safely.
+- **Replay Safety**: Replay logic must handle missing `parsed_action` fields gracefully for events that represent parser failures (e.g., `MALFORMED_JSON`).
