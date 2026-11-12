@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 
-from .models import GameState
+from .models import GameState, json_safe
 
 
 _PUBLIC_CATALOG_FIELDS = ("id", "type", "unit", "seller_stock")
@@ -21,7 +21,7 @@ def make_private_view(role: str, state: GameState) -> dict:
     ]
     active_proposal = None
     if state.active_proposal is not None:
-        active_proposal = deepcopy(state.active_proposal.to_dict())
+        active_proposal = deepcopy(json_safe(state.active_proposal.to_dict()))
         active_proposal.pop("decision_summary", None)
 
     transcript = deepcopy(state.public_transcript)

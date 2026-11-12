@@ -1,6 +1,8 @@
 """Define the scenario schema and negotiation data models."""
 
+import json
 from dataclasses import asdict, dataclass, field
+from decimal import Decimal
 from math import isfinite
 
 
@@ -17,6 +19,20 @@ CATALOG_KEYS = {"id", "type", "unit", "seller_stock"}
 SELLER_KEYS = {"unit_cost", "minimum_unit_price", "reservation_utility", "allowed_actions"}
 BUYER_KEYS = {"unit_value", "budget", "reservation_utility", "allowed_actions"}
 ACTION_TYPES = {"PROPOSE", "ACCEPT", "COUNTER", "WALK_AWAY"}
+
+
+class MoneyJSONEncoder(json.JSONEncoder):
+    """Serialize exact monetary decimals as strings in JSON output."""
+
+    def default(self, value):
+        if isinstance(value, Decimal):
+            return str(value)
+        return super().default(value)
+
+
+def json_safe(value):
+    """Return a JSON-compatible copy while preserving Decimal precision."""
+    return json.loads(json.dumps(value, cls=MoneyJSONEncoder))
 
 
 def _fields(value: object, required: set[str], location: str) -> dict:

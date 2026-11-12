@@ -63,11 +63,13 @@ def validate_action(role: str, action: Action, state: GameState) -> ValidationRe
             return ValidationResult(False, "INVALID_PRICE", "Unit price must be non-negative and finite")
 
     try:
-        calculate_effective_totals(proposal, state)
+        totals = calculate_effective_totals(proposal, state)
     except _ConditionError as exc:
         if exc.code == "DISCOUNT_BELOW_FLOOR" and not proposal.conditions:
             return ValidationResult(False, "PRICE_BELOW_FLOOR", "The proposed price is invalid")
         return ValidationResult(False, exc.code, exc.message)
+    if isinstance(totals, ValidationResult):
+        return totals
 
     return _validate_hard_constraints(proposal, state)
 
@@ -103,6 +105,8 @@ def _validate_hard_constraints(proposal: Proposal, state: GameState) -> Validati
         if exc.code == "DISCOUNT_BELOW_FLOOR" and not proposal.conditions:
             return ValidationResult(False, "PRICE_BELOW_FLOOR", "The proposed price is invalid")
         return ValidationResult(False, exc.code, exc.message)
+    if isinstance(totals, ValidationResult):
+        return totals
     if not proposal.conditions and (
         not isinstance(proposal.effective_prices, dict)
         or proposal.effective_prices != totals["effective_prices"]
@@ -126,8 +130,26 @@ class _ConditionError(ValueError):
         self.message = message
 
 
-def calculate_effective_totals(proposal: Proposal, state: GameState) -> dict:
+def calculate_effective_totals(proposal: Proposal, state: GameState) -> dict | ValidationResult:
     """Evaluate typed bundle conditions and return original and effective totals."""
+    if not isinstance(proposal, Proposal) or not isinstance(proposal.terms, list) or not proposal.terms:
+        return ValidationResult(False, "MALFORMED_TERM", "Proposal terms are malformed")
+    catalog = {entry["id"]: entry for entry in state.catalog}
+    for term in proposal.terms:
+        if (
+            not isinstance(term, Term)
+            or not isinstance(term.item_id, str)
+            or not term.item_id
+            or type(term.quantity) is not int
+            or term.quantity <= 0
+            or not _nonnegative_number(term.unit_price)
+        ):
+            return ValidationResult(False, "MALFORMED_TERM", "Proposal term fields are malformed")
+        if term.item_id not in catalog:
+            return ValidationResult(False, "INVALID_ITEM_ID", "Item is not in the catalog")
+        if term.unit != catalog[term.item_id]["unit"]:
+            return ValidationResult(False, "INVALID_UNIT", "Unit does not match the catalog")
+
     quantities: dict[str, int] = {}
     original_prices: dict[str, int | float] = {}
     for term in proposal.terms:
@@ -137,7 +159,7 @@ def calculate_effective_totals(proposal: Proposal, state: GameState) -> dict:
         original_prices[term.item_id] = term.unit_price
 
     discounts: dict[str, int | float] = {}
-    catalog_ids = {entry["id"] for entry in state.catalog}
+    catalog_ids = set(catalog)
     max_discount = state.bundle_rules.get("max_discount_per_unit")
     for condition in proposal.conditions:
         if not isinstance(condition, Condition) or condition.type != "discount_if_item_in_bundle":

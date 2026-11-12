@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 
-from .models import Action, GameState, Outcome, ValidationResult
+from .models import Action, GameState, Outcome, ValidationResult, json_safe
 from .validator import calculate_effective_totals, validate_action
 
 
@@ -33,7 +33,7 @@ class NegotiationEngine:
         result = validate_action(actor, action, state)
         state.private_attempt_log.append({
             "actor": actor,
-            "action": action.to_dict() if isinstance(action, Action) else repr(action),
+            "action": json_safe(action.to_dict()) if isinstance(action, Action) else repr(action),
             "validation": result.to_dict(),
         })
         if not result.ok:
@@ -50,9 +50,9 @@ class NegotiationEngine:
                 stored_proposal, state
             )["effective_prices"]
 
-        public_action = action.to_dict()
+        public_action = json_safe(action.to_dict())
         if stored_proposal is not None:
-            public_action["proposal"] = stored_proposal.to_dict()
+            public_action["proposal"] = json_safe(stored_proposal.to_dict())
         if public_action["proposal"] is not None:
             public_action["proposal"].pop("decision_summary", None)
         public_action["actor"] = actor

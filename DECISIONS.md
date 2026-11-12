@@ -28,3 +28,8 @@
 - **Fail-Fast on Conditions**: Before T-202, proposals containing conditions were rejected. T-202 now evaluates typed conditions and rejects any discount that cannot be calculated, exceeds the scenario cap, or violates the seller floor.
 - **Action Permissions & Utilities**: Enforce each role's `allowed_actions` in the validator. At acceptance, the temporary purchase-only reservation check fails closed when utility cannot be checked; T-301 owns full utility calculation and metrics.
 - **Exact Integer Math**: Prefer native Python `int` for integer-priced totals to avoid `Decimal` precision limits. Decimal-priced totals use an explicitly sized local `Decimal` context; do not rely on its default precision.
+
+### Phase 2 Review Fixes (Post T-205)
+
+- **JSON Money Serialization**: Because Python's `Decimal` is not JSON serializable, all financial amounts are serialized as `str` in JSON transcripts and exports via `MoneyJSONEncoder`, preserving exact precision.
+- **Defensive Pure Functions**: Helper functions in `validator.py` perform structural checks on incoming terms before arithmetic and return controlled errors rather than raising unhandled exceptions.
