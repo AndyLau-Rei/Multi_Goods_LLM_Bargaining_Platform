@@ -5,10 +5,19 @@ from math import isfinite
 from typing import Any
 
 
-PUBLIC_KEYS = {"scenario_id", "max_rounds", "starting_role", "catalog", "private_profiles"}
+PUBLIC_KEYS = {
+    "scenario_id",
+    "max_rounds",
+    "starting_role",
+    "catalog",
+    "private_profiles",
+    "legal_ranges",
+    "bundle_rules",
+}
 CATALOG_KEYS = {"id", "type", "unit", "seller_stock"}
-SELLER_KEYS = {"unit_cost", "minimum_unit_price"}
-BUYER_KEYS = {"unit_value", "budget"}
+SELLER_KEYS = {"unit_cost", "minimum_unit_price", "reservation_utility", "allowed_actions"}
+BUYER_KEYS = {"unit_value", "budget", "reservation_utility", "allowed_actions"}
+ACTION_TYPES = {"PROPOSE", "ACCEPT", "COUNTER", "WALK_AWAY"}
 
 
 def _fields(value: object, required: set[str], location: str) -> dict:
@@ -75,6 +84,26 @@ def validate_scenario(data: object) -> dict:
         if isinstance(stock, bool) or not isinstance(stock, int) or stock < 0:
             raise ValueError(f"{location}.seller_stock must be a non-negative integer")
 
+    legal_ranges = _fields(scenario["legal_ranges"], {"max_quantity"}, "legal_ranges")
+    max_quantity = _fields(legal_ranges["max_quantity"], item_ids, "legal_ranges.max_quantity")
+    for item_id, value in max_quantity.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"legal_ranges.max_quantity.{item_id} must be a positive integer")
+
+    bundle_rules = _fields(
+        scenario["bundle_rules"], {"max_discount_per_unit", "allowed_condition_types"}, "bundle_rules"
+    )
+    _number(bundle_rules["max_discount_per_unit"], "bundle_rules.max_discount_per_unit")
+    if bundle_rules["max_discount_per_unit"] < 0:
+        raise ValueError("bundle_rules.max_discount_per_unit must be non-negative")
+    condition_types = bundle_rules["allowed_condition_types"]
+    if (
+        not isinstance(condition_types, list)
+        or not condition_types
+        or any(condition_type != "discount_if_item_in_bundle" for condition_type in condition_types)
+    ):
+        raise ValueError("bundle_rules.allowed_condition_types contains an unsupported type")
+
     profiles = _fields(scenario["private_profiles"], {"seller", "buyer"}, "private_profiles")
     seller = _fields(profiles["seller"], SELLER_KEYS, "private_profiles.seller")
     buyer = _fields(profiles["buyer"], BUYER_KEYS, "private_profiles.buyer")
@@ -88,6 +117,16 @@ def validate_scenario(data: object) -> dict:
         for item_id, value in values.items():
             _number(value, f"{location}.{item_id}")
     _number(buyer["budget"], "private_profiles.buyer.budget")
+    for role, profile in (("seller", seller), ("buyer", buyer)):
+        _number(profile["reservation_utility"], f"private_profiles.{role}.reservation_utility")
+        actions = profile["allowed_actions"]
+        if (
+            not isinstance(actions, list)
+            or not actions
+            or any(not isinstance(action, str) or action not in ACTION_TYPES for action in actions)
+            or len(actions) != len(set(actions))
+        ):
+            raise ValueError(f"private_profiles.{role}.allowed_actions contains an invalid action")
     return scenario
 
 

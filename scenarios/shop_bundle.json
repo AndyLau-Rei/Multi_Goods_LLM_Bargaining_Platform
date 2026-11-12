@@ -9,11 +9,22 @@
   "private_profiles": {
     "seller": {
       "unit_cost": {"A": 70, "B": 35},
-      "minimum_unit_price": {"A": 80, "B": 40}
+      "minimum_unit_price": {"A": 80, "B": 40},
+      "reservation_utility": 100,
+      "allowed_actions": ["PROPOSE", "COUNTER", "ACCEPT", "WALK_AWAY"]
     },
     "buyer": {
       "unit_value": {"A": 130, "B": 75},
-      "budget": 200
+      "budget": 200,
+      "reservation_utility": 150,
+      "allowed_actions": ["ACCEPT", "COUNTER", "WALK_AWAY"]
     }
+  },
+  "legal_ranges": {
+    "max_quantity": {"A": 5, "B": 5}
+  },
+  "bundle_rules": {
+    "max_discount_per_unit": 30,
+    "allowed_condition_types": ["discount_if_item_in_bundle"]
   }
 }
