@@ -5,10 +5,11 @@ import sqlite3
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from .models import Outcome, json_safe
+from .models import Action, Outcome, Proposal, json_safe
 
 
 DEFAULT_DB_PATH = Path("results/runs.db")
@@ -220,3 +221,127 @@ def export_run_to_jsonl(
             record = {"run_id": run_id, **event.to_dict()}
             stream.write(_json_text(record))
             stream.write("\n")
+
+
+class ReplayDivergenceError(RuntimeError):
+    """Raised when a persisted action log no longer reproduces its run."""
+
+
+def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
+    """Replay persisted actions in a fresh engine and verify deterministic results."""
+    from .engine import NegotiationEngine
+
+    run = load_run_from_sqlite(run_id, db_path)
+    engine = NegotiationEngine(run["scenario"])
+    action_events = [event for event in run["events"] if event["event_type"] == "ACTION_ATTEMPT"]
+    transition_events = [
+        event for event in run["events"] if event["event_type"] == "STATE_TRANSITION"
+    ]
+    transitions_seen = 0
+    valid_actions = []
+
+    for event in action_events:
+        if event["parsed_action"] is None:
+            continue
+        action_data = _restore_action_numbers(event["parsed_action"])
+        proposal = action_data.get("proposal")
+        if proposal is not None:
+            proposal.setdefault("decision_summary", "")
+        try:
+            result = engine.step(Action.from_dict(action_data), role=event["actor"])
+        except Exception as exc:
+            raise ReplayDivergenceError(
+                f"Replay failed at event {event['event_id']}"
+            ) from exc
+
+        replay_events = engine.event_logger.events
+        replay_attempt = next(
+            event_record
+            for event_record in reversed(replay_events)
+            if event_record.event_type == "ACTION_ATTEMPT"
+        )
+        if replay_attempt.validation_result != event["validation_result"]:
+            raise ReplayDivergenceError(f"Validation diverged at event {event['event_id']}")
+        if replay_attempt.validation_result and replay_attempt.validation_result.get("ok"):
+            valid_actions.append((event, result))
+
+        if len(replay_events) and replay_events[-1].event_type == "STATE_TRANSITION":
+            if transitions_seen >= len(transition_events):
+                raise ReplayDivergenceError("Replay produced an unexpected state transition")
+            expected = transition_events[transitions_seen]["state_transition_summary"]
+            if replay_events[-1].state_transition_summary != expected:
+                raise ReplayDivergenceError(
+                    f"State transition diverged after event {event['event_id']}"
+                )
+            transitions_seen += 1
+
+    if transitions_seen != len(transition_events):
+        raise ReplayDivergenceError("Replay event count diverged")
+    actual_outcome = engine.state.outcome.to_dict() if engine.state.outcome else None
+    if actual_outcome != run["outcome"]:
+        raise ReplayDivergenceError("Final outcome diverged from stored outcome")
+
+    expected_transcript = []
+    for event, _ in valid_actions:
+        action = event["parsed_action"]
+        public = dict(action)
+        public["actor"] = event["actor"]
+        if public.get("proposal") is not None:
+            public["proposal"] = dict(public["proposal"])
+            public["proposal"].pop("decision_summary", None)
+        expected_transcript.append(public)
+    actual_transcript = engine.state.public_transcript
+    if len(expected_transcript) != len(actual_transcript):
+        raise ReplayDivergenceError("Public transcript length diverged")
+    for expected, actual in zip(expected_transcript, actual_transcript):
+        if expected["action_type"] != actual["action_type"] or expected["proposal_id"] != actual["proposal_id"]:
+            raise ReplayDivergenceError("Public transcript diverged")
+        if expected.get("proposal") is not None:
+            expected_proposal = expected["proposal"]
+            actual_proposal = actual["proposal"]
+            for field in ("terms", "conditions", "original_prices"):
+                if expected_proposal.get(field) != actual_proposal.get(field):
+                    raise ReplayDivergenceError("Public proposal diverged")
+
+    proposal_events = [
+        event for event, _ in valid_actions
+        if event["parsed_action"].get("action_type") in {"PROPOSE", "COUNTER"}
+    ]
+    if proposal_events:
+        expected_data = _restore_action_numbers(proposal_events[-1]["parsed_action"]["proposal"])
+        expected_data.setdefault("decision_summary", "")
+        expected_proposal = Proposal.from_dict(expected_data)
+        from .validator import calculate_effective_totals
+
+        totals = calculate_effective_totals(expected_proposal, engine.state)
+        if not isinstance(totals, dict):
+            raise ReplayDivergenceError("Final proposal could not be evaluated")
+        expected_proposal.effective_prices = totals["effective_prices"]
+        if engine.state.active_proposal.to_dict() != expected_proposal.to_dict():
+            raise ReplayDivergenceError("Active proposal diverged")
+
+    return engine.state
+
+
+def _restore_action_numbers(action_data: dict) -> dict:
+    """Restore JSON string money values to numeric values accepted by the models."""
+    action = json.loads(json.dumps(action_data))
+    proposal = action.get("proposal")
+    if proposal is None:
+        return action
+    for term in proposal.get("terms", []):
+        term["unit_price"] = _restore_number(term.get("unit_price"))
+    for condition in proposal.get("conditions", []):
+        condition["discount_per_unit"] = _restore_number(condition.get("discount_per_unit"))
+    for name in ("original_prices", "effective_prices"):
+        proposal[name] = {key: _restore_number(value) for key, value in proposal.get(name, {}).items()}
+    return action
+
+
+def _restore_number(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        return Decimal(value) if "." in value else int(value)
+    except (ValueError, ArithmeticError):
+        return value
