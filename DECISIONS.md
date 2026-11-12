@@ -20,3 +20,11 @@
 
 ## Backlog (do not resolve before their phase)
 - T-204 split, T-302/T-303 storage split, T-401 provider interface detail, T-602 blocking input.
+
+### Post-Phase 1 Review Fixes (T-201)
+
+- **Strict Term Schema**: `Term` no longer accepts an arbitrary `details` dict. Only declared typed fields are accepted, and action validation checks them before a proposal becomes public to prevent privacy leaks.
+- **Immutable Proposals**: The engine uses `copy.deepcopy()` when storing a validated proposal, so acceptance commits the stored snapshot rather than a caller-owned object that can change later.
+- **Fail-Fast on Conditions**: Until T-202 is implemented, reject any proposal containing a condition. Do not accept a conditional discount without calculating and validating it.
+- **Action Permissions & Utilities**: Enforce each role's `allowed_actions` in the validator. At acceptance, the temporary purchase-only reservation check fails closed when utility cannot be checked; T-301 owns full utility calculation and metrics.
+- **Exact Integer Math**: Prefer native Python `int` for integer-priced totals to avoid `Decimal` precision limits. Decimal-priced totals use an explicitly sized local `Decimal` context; do not rely on its default precision.
