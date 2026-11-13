@@ -118,7 +118,7 @@ def generate_failure_report(
             failures.append(
                 _failure(
                     event,
-                    valid_actions // 2 + 1,
+                    (valid_actions + 1) // 2,
                     "timeout",
                     "MAX_ROUNDS",
                     None,
@@ -130,7 +130,7 @@ def generate_failure_report(
             {
                 "event_id": None,
                 "event_type": "OUTCOME",
-                "round": valid_actions // 2 + 1,
+                "round": (valid_actions + 1) // 2,
                 "actor": None,
                 "category": "timeout",
                 "error_code": "MAX_ROUNDS",

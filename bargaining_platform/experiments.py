@@ -27,16 +27,25 @@ class ExperimentResult:
     outcome_status: str | None
 
 
-def condition_id_for(variation: dict[str, Any]) -> str:
+def condition_id_for(variation: dict[str, Any], namespace: str | None = None) -> str:
     """Return a stable ID for one canonical variation definition."""
-    encoded = json.dumps(variation, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    payload = {"variation": variation}
+    if namespace is not None:
+        payload["namespace"] = namespace
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return f"condition-{hashlib.sha256(encoded.encode('utf-8')).hexdigest()[:16]}"
 
 
 class ExperimentRunner:
     """Expand configured variations into sequential, persisted negotiation runs."""
 
-    def __init__(self, config: dict[str, Any] | str | Path, *, db_path: str | Path = DEFAULT_DB_PATH):
+    def __init__(
+        self,
+        config: dict[str, Any] | str | Path,
+        *,
+        db_path: str | Path = DEFAULT_DB_PATH,
+        condition_namespace: str | None = None,
+    ):
         self.config_path = Path(config) if isinstance(config, (str, Path)) else None
         if self.config_path is not None:
             self.config = json.loads(self.config_path.read_text(encoding="utf-8"))
@@ -55,6 +64,9 @@ class ExperimentRunner:
         if any(not isinstance(variation, dict) for variation in variations):
             raise ValueError("each variation must be an object")
         self.db_path = Path(db_path)
+        self.condition_namespace = condition_namespace or self.config.get("condition_namespace")
+        if self.condition_namespace is None and self.config_path is not None:
+            self.condition_namespace = self.config_path.stem
 
     @staticmethod
     def condition_id(variation: dict[str, Any]) -> str:
@@ -64,7 +76,7 @@ class ExperimentRunner:
         base_scenario = load_scenario(self._scenario_path())
         results: list[ExperimentResult] = []
         for variation in self.config["variations"]:
-            condition_id = condition_id_for(variation)
+            condition_id = condition_id_for(variation, self.condition_namespace)
             scenario = deepcopy(base_scenario)
             agent_type = variation.get("agent_type", self.config.get("agent_type", "mock"))
             overrides = {key: value for key, value in variation.items() if key != "agent_type"}
@@ -174,8 +186,20 @@ def compare_experiment_configs(
     from .metrics import calculate_metrics
 
     database = db_path or DEFAULT_DB_PATH
-    results_a = ExperimentRunner(config_a, db_path=database).run()
-    results_b = ExperimentRunner(config_b, db_path=database).run()
+    runner_a = ExperimentRunner(
+        config_a,
+        db_path=database,
+        condition_namespace="baseline",
+    )
+    runner_b = ExperimentRunner(
+        config_b,
+        db_path=database,
+        condition_namespace="treatment",
+    )
+    if len(runner_a.config["variations"]) != 1 or len(runner_b.config["variations"]) != 1:
+        raise ValueError("Comparison only supports configs with a single variation for now.")
+    results_a = runner_a.run()
+    results_b = runner_b.run()
     condition_a = results_a[0].condition_id
     condition_b = results_b[0].condition_id
     metrics_a = calculate_metrics(database, condition_id=condition_a)[condition_a]

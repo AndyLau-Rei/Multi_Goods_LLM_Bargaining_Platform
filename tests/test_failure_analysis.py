@@ -1,6 +1,6 @@
 from bargaining_platform.engine import NegotiationEngine
 from bargaining_platform.metrics import generate_failure_report
-from bargaining_platform.models import Action, Proposal, Term
+from bargaining_platform.models import Action, Condition, Proposal, Term
 from bargaining_platform.scenario import load_scenario
 from bargaining_platform.storage import save_run_to_sqlite
 
@@ -73,3 +73,56 @@ def test_walk_away_report_identifies_turn(tmp_path):
     assert report["outcome_status"] == "NO_DEAL"
     assert walk_away["actor"] == "buyer"
     assert walk_away["round"] == 1
+
+
+def test_parser_errors_are_categorized(tmp_path):
+    scenario = _scenario()
+    engine = NegotiationEngine(scenario)
+    engine.step("not valid json")
+    save_run_to_sqlite("parser", scenario, engine.state.outcome, engine.event_logger.events, tmp_path / "runs.db")
+
+    report = generate_failure_report("parser", tmp_path / "runs.db")
+
+    failure = report["failures"][0]
+    assert failure["error_code"] == "MALFORMED_JSON"
+    assert failure["category"] == "parser_error"
+
+
+def test_hard_constraint_errors_are_categorized(tmp_path):
+    scenario = _scenario()
+    scenario["private_profiles"]["buyer"]["budget"] = 50
+    engine = NegotiationEngine(scenario)
+    proposal = _proposal("budget")
+    engine.step(Action("PROPOSE", proposal.proposal_id, proposal))
+    save_run_to_sqlite("budget", scenario, engine.state.outcome, engine.event_logger.events, tmp_path / "runs.db")
+
+    report = generate_failure_report("budget", tmp_path / "runs.db")
+
+    failure = report["failures"][0]
+    assert failure["error_code"] == "BUDGET_EXCEEDED"
+    assert failure["category"] == "hard_constraint"
+
+
+def test_bundle_errors_are_categorized(tmp_path):
+    scenario = _scenario()
+    engine = NegotiationEngine(scenario)
+    proposal = Proposal(
+        "condition",
+        "all_or_nothing",
+        [
+            Term("purchase", "A", 1, 120, unit="piece"),
+            Term("purchase", "B", 1, 60, unit="piece"),
+        ],
+        [Condition("discount_if_item_in_bundle", "A", 20, "B", 2)],
+        "",
+        {"A": 120, "B": 60},
+        {"A": 120, "B": 60},
+    )
+    engine.step(Action("PROPOSE", proposal.proposal_id, proposal))
+    save_run_to_sqlite("condition", scenario, engine.state.outcome, engine.event_logger.events, tmp_path / "runs.db")
+
+    report = generate_failure_report("condition", tmp_path / "runs.db")
+
+    failure = report["failures"][0]
+    assert failure["error_code"] == "CONDITION_NOT_SATISFIED"
+    assert failure["category"] == "bundle_semantic"
