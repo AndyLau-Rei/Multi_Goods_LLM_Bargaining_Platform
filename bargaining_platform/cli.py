@@ -1,10 +1,12 @@
 """Run a single scenario from the command line."""
 
 import argparse
+import json
 import os
 import sys
 
 from .experiments import ExperimentRunner
+from .metrics import calculate_metrics
 from .model_adapter import OpenAIAdapter
 from .runner import default_mock_adapters, run_llm_negotiation
 from .scenario import load_scenario
@@ -24,6 +26,24 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: {exc}")
             return 1
         print(f"Completed {len(results)} experiment runs")
+        return 0
+
+    if argv and argv[0] == "metrics":
+        metrics_parser = argparse.ArgumentParser(prog="python -m bargaining_platform.cli metrics")
+        selection = metrics_parser.add_mutually_exclusive_group(required=True)
+        selection.add_argument("--condition-id")
+        selection.add_argument("--all", action="store_true")
+        metrics_parser.add_argument("--db-path", default=None)
+        args = metrics_parser.parse_args(argv[1:])
+        try:
+            output = calculate_metrics(
+                args.db_path if args.db_path else None,
+                condition_id=args.condition_id,
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"ERROR: {exc}")
+            return 1
+        print(json.dumps(output, indent=2, sort_keys=True))
         return 0
 
     parser = argparse.ArgumentParser()
