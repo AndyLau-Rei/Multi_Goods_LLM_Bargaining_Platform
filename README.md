@@ -6,13 +6,11 @@ The current implementation is a Python command-line simulator. It provides scrip
 
 ## 1. Start in the repository directory
 
-Run all commands from the directory that contains `pyproject.toml`:
+Download the repository to your local directory:
 
 ```powershell
-cd D:\Programming\workplace_common\FYP\Multi_Goods_LLM_Bargaining_Platform
+git clone https://github.com/AndyLau-Rei/Multi_Goods_LLM_Bargaining_Platform
 ```
-
-Running from the parent `FYP` directory will make relative paths such as `scenarios/shop_bundle.json` and `configs/experiment_baseline.json` fail.
 
 ## 2. Install the project
 
@@ -30,9 +28,7 @@ The editable install exposes the `bargaining_platform` package. The `dev` extra 
 ## 3. Validate a scenario
 
 ```powershell
-python -m bargaining_platform.cli `
-  --scenario scenarios/shop_bundle.json `
-  --agent scripted
+python -m bargaining_platform.cli --scenario scenarios/shop_bundle.json --agent scripted
 ```
 
 Expected output:
@@ -48,9 +44,7 @@ The sample scenario contains products A and B, seller stock and price floors, bu
 ## 4. Run an offline negotiation
 
 ```powershell
-python -m bargaining_platform.cli `
-  --scenario scenarios/shop_bundle.json `
-  --agent mock
+python -m bargaining_platform.cli --scenario scenarios/shop_bundle.json --agent mock
 ```
 
 The mock adapters run a deterministic demonstration without network access. They submit a standalone offer, introduce an A+B bundle, apply the typed discount to A, and accept the bundle.
@@ -69,9 +63,7 @@ The CLI uses `OpenAIAdapter`, which sends JSON-schema output requests to an Open
 
 ```powershell
 $env:LLM_API_KEY = "your-api-key"
-python -m bargaining_platform.cli `
-  --scenario scenarios/shop_bundle.json `
-  --agent llm
+python -m bargaining_platform.cli --scenario scenarios/shop_bundle.json --agent llm
 ```
 
 The adapter defaults to model `gpt-4o-mini` and endpoint `https://api.openai.com/v1/chat/completions`. The CLI does not currently expose model or endpoint flags; change `OpenAIAdapter(...)` in `bargaining_platform/cli.py` or call the Python API if a different compatible endpoint is required.
@@ -92,9 +84,7 @@ notepad scenarios/my_shop.json
 Then run it:
 
 ```powershell
-python -m bargaining_platform.cli `
-  --scenario scenarios/my_shop.json `
-  --agent mock
+python -m bargaining_platform.cli --scenario scenarios/my_shop.json --agent mock
 ```
 
 Important fields are:
@@ -116,9 +106,7 @@ The engine accepts `PROPOSE`, `COUNTER`, `ACCEPT`, and `WALK_AWAY`. Acceptance i
 Use an experiment configuration containing `repetitions`, `scenario_path`, an optional default `agent_type`, and a `variations` list:
 
 ```powershell
-python -m bargaining_platform.cli experiment `
-  --config configs/experiment_baseline.json `
-  --db-path results/baseline.db
+python -m bargaining_platform.cli experiment --config configs/experiment_baseline.json --db-path results/baseline.db
 ```
 
 This expands each variation and repeats it, assigning a stable condition ID to each variation. The provided baseline varies the buyer budget and runs two repetitions per condition.
@@ -126,10 +114,7 @@ This expands each variation and repeats it, assigning a stable condition ID to e
 Run the bundle ablation pair:
 
 ```powershell
-python -m bargaining_platform.cli compare `
-  --config-a configs/ablation_no_bundle.json `
-  --config-b configs/ablation_with_bundle.json `
-  --db-path results/ablation.db
+python -m bargaining_platform.cli compare --config-a configs/ablation_no_bundle.json --config-b configs/ablation_with_bundle.json --db-path results/ablation.db
 ```
 
 `compare` requires one variation in each config and reports agreement rate, mean joint utility, GFT, and bundle frequency. The no-bundle config sets the maximum discount to zero; the treatment config uses the sample bundle rule.
@@ -138,9 +123,7 @@ To run an experiment with the LLM adapter, set the key and put `"agent_type": "l
 
 ```powershell
 $env:LLM_API_KEY = "your-api-key"
-python -m bargaining_platform.cli experiment `
-  --config configs/my_llm_experiment.json `
-  --db-path results/my_llm_experiment.db
+python -m bargaining_platform.cli experiment --config configs/my_llm_experiment.json --db-path results/my_llm_experiment.db
 ```
 
 ## 8. Calculate aggregate metrics
@@ -148,17 +131,13 @@ python -m bargaining_platform.cli experiment `
 Calculate metrics for every condition in a database:
 
 ```powershell
-python -m bargaining_platform.cli metrics `
-  --all `
-  --db-path results/baseline.db
+python -m bargaining_platform.cli metrics --all --db-path results/baseline.db
 ```
 
 Calculate one condition only:
 
 ```powershell
-python -m bargaining_platform.cli metrics `
-  --condition-id CONDITION_ID `
-  --db-path results/baseline.db
+python -m bargaining_platform.cli metrics --condition-id CONDITION_ID --db-path results/baseline.db
 ```
 
 The output includes run count, agreement/no-deal rate, buyer/seller/joint utility, average rounds, bundle frequency, discount size, retries, GFT, normalized price bias, and individual rationality. Metrics are recomputed from persisted structured events, not from free-form model explanations.
@@ -182,9 +161,7 @@ Replay reconstructs the state from the stored scenario and action log. It raises
 Generate a failure report:
 
 ```powershell
-python -m bargaining_platform.cli failures `
-  --run-id RUN_ID `
-  --db-path results/runs.db
+python -m bargaining_platform.cli failures --run-id RUN_ID --db-path results/runs.db
 ```
 
 The report classifies parser errors, hard-constraint errors, bundle semantic errors, walk-away termination, and maximum-round timeouts.
