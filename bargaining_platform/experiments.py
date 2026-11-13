@@ -97,6 +97,11 @@ class ExperimentRunner:
         if agent_type == "llm" and os.getenv("LLM_API_KEY"):
             adapter = OpenAIAdapter()
             return {"seller": adapter, "buyer": adapter}, False
+        if (
+            agent_type == "mock"
+            and scenario.get("bundle_rules", {}).get("max_discount_per_unit") == 0
+        ):
+            return _no_bundle_mock_adapters(), True
         if agent_type == "mock" and _buyer_budget(scenario) >= 160:
             return default_mock_adapters(), True
         return _budget_safe_mock_adapters(scenario), True
@@ -135,3 +140,64 @@ def _budget_safe_mock_adapters(scenario: dict) -> dict[str, MockLLMAdapter]:
         "seller": MockLLMAdapter([json.dumps({"action_type": "PROPOSE", "proposal_id": "experiment-a", "proposal": proposal})]),
         "buyer": MockLLMAdapter([json.dumps({"action_type": "ACCEPT", "proposal_id": "experiment-a"})]),
     }
+
+
+def _no_bundle_mock_adapters() -> dict[str, MockLLMAdapter]:
+    proposal = {
+        "proposal_id": "baseline-a",
+        "acceptance_mode": "all_or_nothing",
+        "terms": [
+            {"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"}
+        ],
+        "conditions": [],
+        "decision_summary": "",
+        "original_prices": {"A": 120},
+        "effective_prices": {"A": 120},
+    }
+    return {
+        "seller": MockLLMAdapter([
+            json.dumps({"action_type": "PROPOSE", "proposal_id": "baseline-a", "proposal": proposal})
+        ]),
+        "buyer": MockLLMAdapter([
+            json.dumps({"action_type": "ACCEPT", "proposal_id": "baseline-a"})
+        ]),
+    }
+
+
+def compare_experiment_configs(
+    config_a: str | Path,
+    config_b: str | Path,
+    *,
+    db_path: str | Path | None = DEFAULT_DB_PATH,
+) -> str:
+    """Run two configs and return a plain-text baseline/treatment comparison."""
+    from .metrics import calculate_metrics
+
+    database = db_path or DEFAULT_DB_PATH
+    results_a = ExperimentRunner(config_a, db_path=database).run()
+    results_b = ExperimentRunner(config_b, db_path=database).run()
+    condition_a = results_a[0].condition_id
+    condition_b = results_b[0].condition_id
+    metrics_a = calculate_metrics(database, condition_id=condition_a)[condition_a]
+    metrics_b = calculate_metrics(database, condition_id=condition_b)[condition_b]
+    return format_comparison(metrics_a, metrics_b)
+
+
+def format_comparison(
+    metrics_a: dict[str, Any],
+    metrics_b: dict[str, Any],
+) -> str:
+    """Format the requested metrics as a dependency-free comparison table."""
+    rows = (
+        ("Agreement Rate", "agreement_rate"),
+        ("Mean Joint Utility", "average_joint_utility"),
+        ("GFT", "gft"),
+        ("Bundle Frequency", "bundle_frequency"),
+    )
+    lines = [
+        "Metric                  Condition A (Baseline: No Bundles)  Condition B (Treatment: Bundles Enabled)",
+        "-" * 102,
+    ]
+    for label, key in rows:
+        lines.append(f"{label:<24} {str(metrics_a.get(key)):<34} {str(metrics_b.get(key))}")
+    return "\n".join(lines)

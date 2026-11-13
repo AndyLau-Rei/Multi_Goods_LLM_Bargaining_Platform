@@ -5,7 +5,7 @@ import json
 import os
 import sys
 
-from .experiments import ExperimentRunner
+from .experiments import ExperimentRunner, compare_experiment_configs
 from .metrics import calculate_metrics
 from .model_adapter import OpenAIAdapter
 from .runner import default_mock_adapters, run_llm_negotiation
@@ -44,6 +44,24 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: {exc}")
             return 1
         print(json.dumps(output, indent=2, sort_keys=True))
+        return 0
+
+    if argv and argv[0] == "compare":
+        compare_parser = argparse.ArgumentParser(prog="python -m bargaining_platform.cli compare")
+        compare_parser.add_argument("--config-a", required=True)
+        compare_parser.add_argument("--config-b", required=True)
+        compare_parser.add_argument("--db-path", default=None)
+        args = compare_parser.parse_args(argv[1:])
+        try:
+            report = compare_experiment_configs(
+                args.config_a,
+                args.config_b,
+                db_path=args.db_path if args.db_path else None,
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"ERROR: {exc}")
+            return 1
+        print(report)
         return 0
 
     parser = argparse.ArgumentParser()
