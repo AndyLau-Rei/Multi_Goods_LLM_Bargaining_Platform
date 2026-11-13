@@ -6,7 +6,7 @@ import os
 import sys
 
 from .experiments import ExperimentRunner, compare_experiment_configs
-from .metrics import calculate_metrics
+from .metrics import calculate_metrics, format_failure_report, generate_failure_report
 from .model_adapter import OpenAIAdapter
 from .runner import default_mock_adapters, run_llm_negotiation
 from .scenario import load_scenario
@@ -62,6 +62,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: {exc}")
             return 1
         print(report)
+        return 0
+
+    if argv and argv[0] == "failures":
+        failures_parser = argparse.ArgumentParser(prog="python -m bargaining_platform.cli failures")
+        failures_parser.add_argument("--run-id", required=True)
+        failures_parser.add_argument("--db-path", default=None)
+        args = failures_parser.parse_args(argv[1:])
+        try:
+            report = generate_failure_report(
+                args.run_id,
+                args.db_path if args.db_path else None,
+            )
+        except (OSError, KeyError, ValueError, RuntimeError) as exc:
+            print(f"ERROR: {exc}")
+            return 1
+        print(format_failure_report(report))
         return 0
 
     parser = argparse.ArgumentParser()

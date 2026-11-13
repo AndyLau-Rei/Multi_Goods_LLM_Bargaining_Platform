@@ -11,7 +11,17 @@ from typing import Any
 
 from .models import GameState, Proposal, ValidationResult, json_safe
 from .storage import DEFAULT_DB_PATH, _create_schema
+from .storage import load_run_from_sqlite
 from .validator import calculate_effective_totals
+
+
+_PARSER_ERRORS = {"MALFORMED_JSON", "SCHEMA_VIOLATION"}
+_HARD_CONSTRAINT_ERRORS = {
+    "PRICE_BELOW_FLOOR",
+    "BUDGET_EXCEEDED",
+    "INSUFFICIENT_STOCK",
+}
+_BUNDLE_ERRORS = {"CONDITION_NOT_SATISFIED", "DISCOUNT_EXCEEDS_CAP"}
 
 
 def calculate_metrics(
@@ -60,6 +70,131 @@ def compute_metrics(
 ) -> dict[str, dict[str, float | int | None]]:
     """Compatibility alias for callers that use ``compute_metrics``."""
     return calculate_metrics(db_path, condition_id=condition_id)
+
+
+def generate_failure_report(
+    run_id: str,
+    db_path: str | Path | None = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Extract structured validation and termination failures for one run."""
+    run = load_run_from_sqlite(run_id, db_path or DEFAULT_DB_PATH)
+    failures: list[dict[str, Any]] = []
+    valid_actions = 0
+    timeout_seen = False
+
+    for event in run["events"]:
+        if event["event_type"] == "ACTION_ATTEMPT":
+            validation = event.get("validation_result") or {}
+            action = event.get("parsed_action") or {}
+            round_number = valid_actions // 2 + 1
+            if validation.get("ok") is not True:
+                error_code = validation.get("error_code") or "INVALID_ACTION"
+                failures.append(
+                    _failure(
+                        event,
+                        round_number,
+                        _failure_category(error_code),
+                        error_code,
+                        action or None,
+                    )
+                )
+            elif action.get("action_type") == "WALK_AWAY":
+                failures.append(
+                    _failure(
+                        event,
+                        round_number,
+                        "premature_termination",
+                        "WALK_AWAY",
+                        action,
+                    )
+                )
+            if validation.get("ok") is True:
+                valid_actions += 1
+        elif (
+            event["event_type"] == "STATE_TRANSITION"
+            and "Maximum rounds" in (event.get("state_transition_summary") or "")
+        ):
+            timeout_seen = True
+            failures.append(
+                _failure(
+                    event,
+                    valid_actions // 2 + 1,
+                    "timeout",
+                    "MAX_ROUNDS",
+                    None,
+                )
+            )
+
+    if run["outcome_status"] == "MAX_ROUNDS" and not timeout_seen:
+        failures.append(
+            {
+                "event_id": None,
+                "event_type": "OUTCOME",
+                "round": valid_actions // 2 + 1,
+                "actor": None,
+                "category": "timeout",
+                "error_code": "MAX_ROUNDS",
+                "action_attempted": None,
+            }
+        )
+
+    counts: dict[str, int] = {}
+    for failure in failures:
+        counts[failure["category"]] = counts.get(failure["category"], 0) + 1
+    return {
+        "run_id": run_id,
+        "outcome_status": run["outcome_status"],
+        "failure_counts": counts,
+        "failures": failures,
+    }
+
+
+def format_failure_report(report: dict[str, Any]) -> str:
+    """Render a failure report without interpreting free-form model text."""
+    lines = [
+        f"Failure report for run {report['run_id']}",
+        f"Outcome: {report['outcome_status']}",
+    ]
+    if not report["failures"]:
+        lines.append("No failures recorded.")
+        return "\n".join(lines)
+    lines.append("Failures:")
+    for failure in report["failures"]:
+        lines.append(
+            f"- Event {failure['event_id']}, Round {failure['round']}, "
+            f"Actor: {failure['actor']}, Category: {failure['category']}, "
+            f"Error: {failure['error_code']}, "
+            f"Action attempted: {failure['action_attempted']}"
+        )
+    return "\n".join(lines)
+
+
+def _failure(
+    event: dict[str, Any],
+    round_number: int,
+    category: str,
+    error_code: str,
+    action: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "event_id": event["event_id"],
+        "event_type": event["event_type"],
+        "round": round_number,
+        "actor": event["actor"],
+        "category": category,
+        "error_code": error_code,
+        "action_attempted": action if action is not None else event.get("raw_output"),
+    }
+
+
+def _failure_category(error_code: str) -> str:
+    if error_code in _PARSER_ERRORS:
+        return "parser_error"
+    if error_code in _HARD_CONSTRAINT_ERRORS:
+        return "hard_constraint"
+    if error_code in _BUNDLE_ERRORS:
+        return "bundle_semantic"
+    return "validation_error"
 
 
 def _run_data(run: sqlite3.Row, events: list[sqlite3.Row]) -> dict[str, Any]:
