@@ -9,7 +9,9 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
+from .models import GameState, Proposal, ValidationResult, json_safe
 from .storage import DEFAULT_DB_PATH, _create_schema
+from .validator import calculate_effective_totals
 
 
 def calculate_metrics(
@@ -21,28 +23,33 @@ def calculate_metrics(
     with sqlite3.connect(database) as connection:
         connection.row_factory = sqlite3.Row
         _create_schema(connection)
-        query = "SELECT run_id, condition_id FROM runs"
+        query = """
+            SELECT
+                r.run_id, r.condition_id, r.outcome_status, r.outcome_json, r.scenario_json,
+                e.event_type, e.parsed_action_json, e.validation_result_json
+            FROM runs AS r
+            LEFT JOIN events AS e ON e.run_id = r.run_id
+        """
         parameters: tuple[Any, ...] = ()
         if condition_id is not None:
-            query += " WHERE condition_id = ?"
+            query += " WHERE r.condition_id = ?"
             parameters = (condition_id,)
-        run_rows = connection.execute(query, parameters).fetchall()
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for row in run_rows:
-            events = connection.execute(
-                """
-                SELECT event_type, parsed_action_json, validation_result_json
-                FROM events WHERE run_id = ? ORDER BY event_id
-                """,
-                (row["run_id"],),
-            ).fetchall()
-            run = connection.execute(
-                "SELECT outcome_status, outcome_json, scenario_json FROM runs WHERE run_id = ?",
-                (row["run_id"],),
-            ).fetchone()
-            grouped.setdefault(row["condition_id"] or "unassigned", []).append(
-                _run_data(run, events)
+        query += " ORDER BY r.run_id, e.event_id"
+        grouped_rows: dict[str, dict[str, Any]] = {}
+        for row in connection.execute(query, parameters):
+            run = grouped_rows.setdefault(
+                row["run_id"],
+                {"row": row, "events": []},
             )
+            if row["event_type"] is not None:
+                run["events"].append(row)
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for run in grouped_rows.values():
+        row = run["row"]
+        grouped.setdefault(row["condition_id"] or "unassigned", []).append(
+            _run_data(row, run["events"])
+        )
 
     return {key: _aggregate(runs) for key, runs in sorted(grouped.items())}
 
@@ -73,7 +80,7 @@ def _run_data(run: sqlite3.Row, events: list[sqlite3.Row]) -> dict[str, Any]:
     for attempt in valid:
         action = attempt["action"] or {}
         if action.get("action_type") in {"PROPOSE", "COUNTER"} and action.get("proposal"):
-            proposal = action["proposal"]
+            proposal = _authoritative_proposal(action["proposal"], scenario)
         elif action.get("action_type") == "ACCEPT":
             break
     return {
@@ -165,12 +172,12 @@ def _is_bundle(proposal: dict[str, Any] | None) -> bool:
 
 
 def _discount_size(proposal: dict[str, Any] | None) -> Fraction | None:
+    """Return the mean per-unit discount across discounted item lines."""
     if not proposal:
         return None
     original = proposal.get("original_prices") or {}
     effective = proposal.get("effective_prices") or {}
-    total = Fraction(0)
-    found = False
+    discounts: list[Fraction] = []
     for term in proposal.get("terms", []):
         item_id = term.get("item_id")
         original_price = _fraction(original.get(item_id, term.get("unit_price")))
@@ -178,9 +185,36 @@ def _discount_size(proposal: dict[str, Any] | None) -> Fraction | None:
         quantity = _fraction(term.get("quantity"))
         if original_price is None or effective_price is None or quantity is None:
             return None
-        total += quantity * (original_price - effective_price)
-        found = found or original_price != effective_price
-    return total if found else Fraction(0)
+        difference = original_price - effective_price
+        if difference != 0:
+            discounts.append(difference)
+    return sum(discounts, Fraction(0)) / len(discounts) if discounts else Fraction(0)
+
+
+def _authoritative_proposal(proposal_data: dict[str, Any], scenario: dict[str, Any]) -> dict[str, Any]:
+    """Recompute prices from typed terms and conditions, ignoring logged price outputs."""
+    data = json.loads(json.dumps(proposal_data))
+    data.setdefault("decision_summary", "")
+    data["effective_prices"] = {}
+    try:
+        proposal = Proposal.from_dict(data)
+        state = GameState(
+            current_actor="seller",
+            round_number=1,
+            catalog=scenario["catalog"],
+            private_profiles=scenario["private_profiles"],
+            max_rounds=scenario["max_rounds"],
+            legal_ranges=scenario["legal_ranges"],
+            bundle_rules=scenario["bundle_rules"],
+        )
+        totals = calculate_effective_totals(proposal, state)
+    except (KeyError, TypeError, ValueError):
+        return data
+    if isinstance(totals, ValidationResult):
+        return data
+    data["original_prices"] = json_safe(totals["original_prices"])
+    data["effective_prices"] = json_safe(totals["effective_prices"])
+    return data
 
 
 def _price(proposal: dict, item_id: str, fallback: Any) -> Fraction | None:
