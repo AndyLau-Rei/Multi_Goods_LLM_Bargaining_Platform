@@ -16,6 +16,7 @@ def test_seller_prompt_generation():
 
     prompt = render_prompt("seller", seller_view)
 
+    assert "You are a tough seller trying to maximize profit and clear inventory." in prompt
     assert "seller" in prompt
     assert "maximize seller utility" in prompt
     assert "unit_cost" in prompt
@@ -29,6 +30,7 @@ def test_buyer_prompt_generation():
 
     prompt = render_prompt("buyer", buyer_view)
 
+    assert "You are a strategic buyer trying to get the lowest price and best bundle deal." in prompt
     assert "buyer" in prompt
     assert "maximize buyer utility" in prompt
     assert "unit_value" in prompt

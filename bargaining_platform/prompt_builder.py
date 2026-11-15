@@ -2,11 +2,13 @@
 
 from copy import deepcopy
 import json
+from pathlib import Path
 
 from .models import GameState, json_safe
 
 
 _PUBLIC_CATALOG_FIELDS = ("id", "type", "unit", "seller_stock")
+_PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 
 def make_private_view(role: str, state: GameState) -> dict:
@@ -66,37 +68,17 @@ def render_prompt(role: str, private_view: dict) -> str:
         "proposal_id": "current-proposal-id",
         "proposal": None,
     }
-
-    return f"""You are the {role} in a structured multi-product negotiation.
-
-ROLE AND OBJECTIVE
-Your role is {role}. You must {objective} while obeying every hard constraint.
-
-PRIVATE CONSTRAINTS
-These values belong only to you and must guide your decision:
-{json.dumps(profile, indent=2, sort_keys=True)}
-
-PUBLIC CATALOG
-{json.dumps(catalog, indent=2, sort_keys=True)}
-
-RULES AND BUNDLE SEMANTICS
-- Proposals are all-or-nothing: ACCEPT accepts every term and condition in the current proposal.
-- ACCEPT may reference only the current proposal_id and must not include a replacement proposal.
-- A typed discount_if_item_in_bundle condition applies only when its required item is in the same proposal with at least its minimum quantity.
-- If you propose a discount for A conditioned on B, the engine will evaluate it strictly against the catalog, inventory, legal limits, scenario discount cap, and seller price floors.
-- Use only the permitted actions listed in your private constraints. Do not invent items, quantities, benefits, or private information.
-
-CURRENT STATE
-Remaining rounds: {private_view.get("remaining_rounds")}
-Active proposal:
-{json.dumps(active_proposal, indent=2, sort_keys=True)}
-Public transcript:
-{json.dumps(transcript, indent=2, sort_keys=True)}
-
-OUTPUT FORMAT
-Output ONLY one valid JSON object matching this Action schema. Do not add Markdown, explanations, or private reasoning.
-{json.dumps(action_schema, indent=2, sort_keys=True)}
-
-Minimal example:
-{json.dumps(example, indent=2, sort_keys=True)}
-"""
+    template_path = _PROMPT_DIR / f"{role}_prompt.txt"
+    if not template_path.is_file():
+        raise FileNotFoundError(f"Prompt template not found: {template_path}")
+    template = template_path.read_text(encoding="utf-8")
+    return template.format(
+        objective=objective,
+        private_constraints=json.dumps(profile, indent=2, sort_keys=True),
+        catalog=json.dumps(catalog, indent=2, sort_keys=True),
+        active_proposal=json.dumps(active_proposal, indent=2, sort_keys=True),
+        transcript=json.dumps(transcript, indent=2, sort_keys=True),
+        remaining_rounds=private_view.get("remaining_rounds"),
+        action_schema=json.dumps(action_schema, indent=2, sort_keys=True),
+        example=json.dumps(example, indent=2, sort_keys=True),
+    )
