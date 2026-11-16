@@ -27,6 +27,7 @@ _BUNDLE_ERRORS = {"CONDITION_NOT_SATISFIED", "DISCOUNT_EXCEEDS_CAP"}
 def calculate_metrics(
     db_path: str | Path | None = DEFAULT_DB_PATH,
     condition_id: str | None = None,
+    run_id: str | None = None,
 ) -> dict[str, dict[str, float | int | None]]:
     """Return aggregate metrics grouped by condition, using SQLite records only."""
     database = Path(db_path or DEFAULT_DB_PATH)
@@ -41,9 +42,15 @@ def calculate_metrics(
             LEFT JOIN events AS e ON e.run_id = r.run_id
         """
         parameters: tuple[Any, ...] = ()
+        filters = []
         if condition_id is not None:
-            query += " WHERE r.condition_id = ?"
-            parameters = (condition_id,)
+            filters.append("r.condition_id = ?")
+            parameters += (condition_id,)
+        if run_id is not None:
+            filters.append("r.run_id = ?")
+            parameters += (run_id,)
+        if filters:
+            query += " WHERE " + " AND ".join(filters)
         query += " ORDER BY r.run_id, e.event_id"
         grouped_rows: dict[str, dict[str, Any]] = {}
         for row in connection.execute(query, parameters):
@@ -67,9 +74,10 @@ def calculate_metrics(
 def compute_metrics(
     db_path: str | Path | None = DEFAULT_DB_PATH,
     condition_id: str | None = None,
+    run_id: str | None = None,
 ) -> dict[str, dict[str, float | int | None]]:
     """Compatibility alias for callers that use ``compute_metrics``."""
-    return calculate_metrics(db_path, condition_id=condition_id)
+    return calculate_metrics(db_path, condition_id=condition_id, run_id=run_id)
 
 
 def generate_failure_report(

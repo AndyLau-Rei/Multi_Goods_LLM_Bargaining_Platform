@@ -51,3 +51,16 @@
 - **Parser Failure Handling**: Malformed LLM outputs are caught by `parse_action` and routed through the existing T-102 retry counter. No separate retry loop is allowed.
 - **Database Schema Migration**: To support new columns (like `metadata_json`) while maintaining backward compatibility, schema migration (`_create_schema`) MUST be executed before reading persisted runs, ensuring pre-T-404 databases can still be replayed safely.
 - **Replay Safety**: Replay logic must handle missing `parsed_action` fields gracefully for events that represent parser failures (e.g., `MALFORMED_JSON`).
+
+### Phase 5 Decisions (Experiments and Evaluation)
+
+- **Experiment Identity**: Condition IDs hash the canonical variation plus a config namespace, so identical overrides in different experiments remain distinct. Each repetition gets a unique run ID and is persisted separately.
+- **Comparison Scope**: The compare command accepts exactly one variation per config and assigns separate baseline and treatment namespaces. It rejects larger matrices rather than silently omitting conditions from the report.
+- **Persisted Metrics**: Aggregate metrics read SQLite runs and structured events; bundle prices are recomputed from the saved proposal and scenario instead of trusting pre-validation action payload prices. Average discount size means the mean per-unit discount on discounted lines.
+- **Failure Analysis**: Failure reports classify structured validation errors and terminal actions, linking each finding to its event and round. Parser, hard-constraint, bundle, walk-away, and timeout failures are reported without interpreting model prose.
+
+### Prompt Template Decisions (Post Phase 5)
+
+- **Runtime Prompt Selection**: The run and experiment CLI commands accept independent `--seller-prompt` and `--buyer-prompt` file paths. The runner passes those paths to `render_prompt`, allowing any readable text template to be selected without changing the engine.
+- **Fixed Default Templates**: When no path is supplied, each role uses its multi-product template. Single-product templates remain available by explicit path; catalog size does not select a template automatically.
+- **Prompt Privacy Boundary**: Template variables come from the role-specific private view and are deep-copied and converted with `json_safe()` before rendering. A missing selected template raises `FileNotFoundError`.

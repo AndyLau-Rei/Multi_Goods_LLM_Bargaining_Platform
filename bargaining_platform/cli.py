@@ -1,135 +1,151 @@
-"""Run a single scenario from the command line."""
+"""Command-line interface for running and inspecting negotiations."""
+
+from __future__ import annotations
 
 import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 from .experiments import ExperimentRunner, compare_experiment_configs
 from .metrics import calculate_metrics, format_failure_report, generate_failure_report
 from .model_adapter import OpenAIAdapter
 from .runner import default_mock_adapters, run_llm_negotiation
 from .scenario import load_scenario
+from .storage import Event, export_run_to_jsonl, load_run_from_sqlite, replay_run
 
 
-def main(argv: list[str] | None = None) -> int:
-    argv = sys.argv[1:] if argv is None else argv
-    if argv and argv[0] == "experiment":
-        experiment_parser = argparse.ArgumentParser(prog="python -m bargaining_platform.cli experiment")
-        experiment_parser.add_argument("--config", required=True)
-        experiment_parser.add_argument("--db-path", default=None)
-        experiment_parser.add_argument("--seller-prompt", default=None)
-        experiment_parser.add_argument("--buyer-prompt", default=None)
-        args = experiment_parser.parse_args(argv[1:])
-        try:
-            runner = ExperimentRunner(
-                args.config,
-                **{
-                    key: value
-                    for key, value in {
-                        "db_path": args.db_path,
-                        "seller_prompt_path": args.seller_prompt,
-                        "buyer_prompt_path": args.buyer_prompt,
-                    }.items()
-                    if value
-                },
-            )
-            results = runner.run()
-        except (OSError, ValueError, RuntimeError) as exc:
-            print(f"ERROR: {exc}")
-            return 1
-        print(f"Completed {len(results)} experiment runs")
-        return 0
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m bargaining_platform.cli",
+        description="Run deterministic bargaining negotiations and inspect their results.",
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
 
-    if argv and argv[0] == "metrics":
-        metrics_parser = argparse.ArgumentParser(prog="python -m bargaining_platform.cli metrics")
-        selection = metrics_parser.add_mutually_exclusive_group(required=True)
-        selection.add_argument("--condition-id")
-        selection.add_argument("--all", action="store_true")
-        metrics_parser.add_argument("--db-path", default=None)
-        args = metrics_parser.parse_args(argv[1:])
-        try:
-            output = calculate_metrics(
-                args.db_path if args.db_path else None,
-                condition_id=args.condition_id,
-            )
-        except (OSError, ValueError, RuntimeError) as exc:
-            print(f"ERROR: {exc}")
-            return 1
-        print(json.dumps(output, indent=2, sort_keys=True))
-        return 0
+    run = commands.add_parser("run", help="Run one negotiation from a scenario.")
+    run.add_argument("--scenario", required=True, help="Path to the scenario JSON file.")
+    run.add_argument("--agent", choices=("scripted", "llm", "mock"), default="scripted", help="Agent mode (default: scripted).")
+    run.add_argument("--seller-prompt", help="Optional seller prompt template path.")
+    run.add_argument("--buyer-prompt", help="Optional buyer prompt template path.")
+    run.add_argument("--db-path", default=None, help="SQLite output path (default: results/runs.db).")
 
-    if argv and argv[0] == "compare":
-        compare_parser = argparse.ArgumentParser(prog="python -m bargaining_platform.cli compare")
-        compare_parser.add_argument("--config-a", required=True)
-        compare_parser.add_argument("--config-b", required=True)
-        compare_parser.add_argument("--db-path", default=None)
-        args = compare_parser.parse_args(argv[1:])
-        try:
-            report = compare_experiment_configs(
-                args.config_a,
-                args.config_b,
-                db_path=args.db_path if args.db_path else None,
-            )
-        except (OSError, ValueError, RuntimeError) as exc:
-            print(f"ERROR: {exc}")
-            return 1
-        print(report)
-        return 0
+    experiment = commands.add_parser("experiment", help="Run a batch experiment configuration.")
+    experiment.add_argument("--config", required=True, help="Experiment configuration JSON path.")
+    experiment.add_argument("--db-path", default=None, help="SQLite output path.")
+    experiment.add_argument("--seller-prompt", help="Optional seller prompt template path.")
+    experiment.add_argument("--buyer-prompt", help="Optional buyer prompt template path.")
 
-    if argv and argv[0] == "failures":
-        failures_parser = argparse.ArgumentParser(prog="python -m bargaining_platform.cli failures")
-        failures_parser.add_argument("--run-id", required=True)
-        failures_parser.add_argument("--db-path", default=None)
-        args = failures_parser.parse_args(argv[1:])
-        try:
-            report = generate_failure_report(
-                args.run_id,
-                args.db_path if args.db_path else None,
-            )
-        except (OSError, KeyError, ValueError, RuntimeError) as exc:
-            print(f"ERROR: {exc}")
-            return 1
-        print(format_failure_report(report))
-        return 0
+    compare = commands.add_parser("compare", help="Run and compare two single-condition experiments.")
+    compare.add_argument("--config-a", required=True, help="Baseline experiment configuration JSON path.")
+    compare.add_argument("--config-b", required=True, help="Treatment experiment configuration JSON path.")
+    compare.add_argument("--db-path", default=None, help="SQLite output path.")
 
-    if argv and argv[0] == "run":
-        argv = argv[1:]
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--scenario", required=True)
-    parser.add_argument("--agent", choices=("scripted", "llm", "mock"), default="scripted")
-    parser.add_argument("--seller-prompt", default=None)
-    parser.add_argument("--buyer-prompt", default=None)
-    args = parser.parse_args(argv)
+    metrics = commands.add_parser("metrics", help="Calculate metrics from persisted runs.")
+    selection = metrics.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--run-id", help="Calculate metrics for one persisted run.")
+    selection.add_argument("--condition-id", help="Calculate metrics for one experiment condition.")
+    selection.add_argument("--all", action="store_true", help="Calculate metrics for every condition.")
+    metrics.add_argument("--db-path", default=None, help="SQLite input path (default: results/runs.db).")
 
+    failures = commands.add_parser("failures", help="Generate a structured failure report for one run.")
+    failures.add_argument("--run-id", required=True, help="Persisted run ID.")
+    failures.add_argument("--db-path", default=None, help="SQLite input path.")
+
+    replay = commands.add_parser("replay", help="Replay one persisted run without an LLM.")
+    replay.add_argument("--run-id", required=True, help="Persisted run ID.")
+    replay.add_argument("--db-path", default=None, help="SQLite input path.")
+
+    export = commands.add_parser("export", help="Export one run's event log as JSONL.")
+    export.add_argument("--run-id", required=True, help="Persisted run ID.")
+    export.add_argument("--output", required=True, help="Destination JSONL file.")
+    export.add_argument("--db-path", default=None, help="SQLite input path.")
+
+    return parser
+
+
+def _run(args: argparse.Namespace) -> int:
     try:
         scenario = load_scenario(args.scenario)
-    except ValueError as exc:
-        print(f"ERROR: {exc}")
-        return 1
-
-    if args.agent == "scripted":
-        print(f"Loaded scenario: {scenario['scenario_id']} with {len(scenario['catalog'])} catalog items")
-        return 0
-
-    if args.agent == "mock" or not os.getenv("LLM_API_KEY"):
-        adapters = default_mock_adapters()
-    else:
-        adapter = OpenAIAdapter()
-        adapters = {"seller": adapter, "buyer": adapter}
-    try:
+        if args.agent == "scripted":
+            print(f"Loaded scenario: {scenario['scenario_id']} with {len(scenario['catalog'])} catalog items")
+            return 0
+        use_mock = args.agent == "mock" or not os.getenv("LLM_API_KEY")
+        if use_mock:
+            adapters = default_mock_adapters()
+        else:
+            adapter = OpenAIAdapter()
+            adapters = {"seller": adapter, "buyer": adapter}
         engine = run_llm_negotiation(
             scenario,
             adapters,
-            mock_demo=args.agent == "mock" or not os.getenv("LLM_API_KEY"),
+            db_path=args.db_path or "results/runs.db",
+            mock_demo=use_mock,
             seller_prompt_path=args.seller_prompt,
             buyer_prompt_path=args.buyer_prompt,
         )
+        print(f"Completed negotiation: {engine.state.outcome.status} (run_id: {engine.run_id})")
+        return 0
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"ERROR: {exc}")
         return 1
-    print(f"Completed negotiation: {engine.state.outcome.status} (run_id: {engine.run_id})")
-    return 0
+
+
+def _events_from_run(run: dict) -> tuple[Event, ...]:
+    return tuple(
+        Event(**{key: value for key, value in event.items() if key != "run_id"})
+        for event in run["events"]
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    # Keep the pre-T-701 ``--scenario ...`` form working for existing scripts.
+    if raw_args and raw_args[0].startswith("-") and "--scenario" in raw_args:
+        raw_args.insert(0, "run")
+    args = _parser().parse_args(raw_args)
+    database = args.db_path or "results/runs.db"
+    try:
+        if args.command == "run":
+            return _run(args)
+        if args.command == "experiment":
+            runner = ExperimentRunner(
+                args.config,
+                db_path=database,
+                seller_prompt_path=args.seller_prompt,
+                buyer_prompt_path=args.buyer_prompt,
+            )
+            results = runner.run()
+            print(f"Completed {len(results)} experiment runs")
+            return 0
+        if args.command == "compare":
+            print(compare_experiment_configs(args.config_a, args.config_b, db_path=database))
+            return 0
+        if args.command == "metrics":
+            output = calculate_metrics(
+                database,
+                condition_id=args.condition_id,
+                run_id=args.run_id,
+            )
+            print(json.dumps(output, indent=2, sort_keys=True))
+            return 0
+        if args.command == "failures":
+            print(format_failure_report(generate_failure_report(args.run_id, database)))
+            return 0
+        if args.command == "replay":
+            state = replay_run(args.run_id, database)
+            status = state.outcome.status if state.outcome else "IN_PROGRESS"
+            print(f"Replay successful: {args.run_id} ({status})")
+            return 0
+        if args.command == "export":
+            run = load_run_from_sqlite(args.run_id, database)
+            export_run_to_jsonl(args.run_id, _events_from_run(run), Path(args.output))
+            print(f"Exported {len(run['events'])} events to {args.output}")
+            return 0
+    except (OSError, KeyError, ValueError, RuntimeError) as exc:
+        print(f"ERROR: {exc}")
+        return 1
+    return 1
 
 
 if __name__ == "__main__":
