@@ -30,13 +30,24 @@ def test_view_privacy_isolation(tmp_path, monkeypatch):
         json={"scenario_id": "scenarios/shop_bundle.json", "agent_type": "mock"},
     ).json()["run_id"]
 
-    response = client.get(f"/runs/{run_id}/view", params={"role": "buyer"})
+    response = client.get(
+        f"/runs/{run_id}/view",
+        params={"role": "buyer"},
+        headers={"X-Agent-Role": "buyer"},
+    )
     assert response.status_code == 200
     serialized = json.dumps(response.json(), sort_keys=True)
     assert "unit_cost" not in serialized
     assert "minimum_unit_price" not in serialized
     assert '"70"' not in serialized
     assert '"80"' not in serialized
+
+    assert client.get(f"/runs/{run_id}/view", params={"role": "seller"}).status_code == 403
+    assert client.get(
+        f"/runs/{run_id}/view",
+        params={"role": "seller"},
+        headers={"X-Agent-Role": "buyer"},
+    ).status_code == 403
 
 
 def test_viewer_page_and_static_mount():
@@ -78,9 +89,14 @@ def test_events_show_authoritative_effective_bundle_price(tmp_path, monkeypatch)
 
     response = TestClient(app).get("/runs/discounted/events")
     assert response.status_code == 200
+    proposal = response.json()["events"][0]["public_transcript"]["proposal"]
+    assert proposal["terms"][0]["unit_price"] == 120
+    assert proposal["terms"][0]["effective_unit_price"] == 100
+    assert proposal["terms"][0]["effective_total_price"] == 100
+    assert proposal["effective_total_price"] == 160
+    assert proposal["conditions"][0]["discount_per_unit"] == 20
+    assert response.json()["round_number"] == 1
     serialized = json.dumps(response.json(), sort_keys=True)
-    assert "120" not in serialized
-    assert "100" in serialized
     assert "validation_result" not in serialized
     assert "raw_output" not in serialized
     assert "metadata" not in serialized

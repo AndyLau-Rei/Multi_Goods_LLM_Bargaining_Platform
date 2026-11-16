@@ -7,8 +7,8 @@ function money(value) { return value === undefined || value === null ? "—" : S
 function proposalText(proposal) {
   if (!proposal) return "";
   const lines = (proposal.terms || []).map((term) => {
-    const effective = proposal.effective_prices && proposal.effective_prices[term.item_id];
-    return `${term.item_id}: ${term.quantity} × ${money(effective ?? term.unit_price)}`;
+    const effective = term.effective_unit_price ?? proposal.effective_prices?.[term.item_id];
+    return `${term.item_id}: ${term.quantity} × ${money(effective ?? term.unit_price)} effective`;
   });
   (proposal.conditions || []).forEach((condition) => {
     lines.push(`Condition: ${condition.discounted_item_id} discount ${money(condition.discount_per_unit)} if ${condition.required_item_id} ≥ ${condition.minimum_required_quantity}`);
@@ -16,17 +16,10 @@ function proposalText(proposal) {
   return lines.join("\n");
 }
 
-function renderEvents(events) {
+function renderEvents(events, roundNumber) {
   const transcript = $("transcript");
   transcript.replaceChildren();
   const publicEvents = events.filter((event) => event.event_type === "ACTION_ATTEMPT" && event.public_transcript);
-  if (!publicEvents.length) {
-    const empty = document.createElement("p");
-    empty.className = "text-sm text-gray-400";
-    empty.textContent = "No public actions yet.";
-    transcript.appendChild(empty);
-    return;
-  }
   events.forEach((event) => {
     if (event.event_type === "STATE_TRANSITION" && event.state_transition_summary) {
       const system = document.createElement("p");
@@ -54,7 +47,13 @@ function renderEvents(events) {
     bubble.append(badge, content);
     transcript.appendChild(bubble);
   });
-  $("metric-round").textContent = String(Math.ceil(publicEvents.length / 2));
+  if (!publicEvents.length) {
+    const empty = document.createElement("p");
+    empty.className = "text-center text-sm text-gray-400";
+    empty.textContent = "No public actions yet.";
+    transcript.prepend(empty);
+  }
+  $("metric-round").textContent = money(roundNumber);
 }
 
 async function refresh(runId) {
@@ -65,7 +64,7 @@ async function refresh(runId) {
   if (!eventsResponse.ok || !statusResponse.ok) throw new Error("Run could not be loaded");
   const events = await eventsResponse.json();
   const status = await statusResponse.json();
-  renderEvents(events.events || []);
+  renderEvents(events.events || [], events.round_number);
   const outcome = status.outcome || {};
   $("metric-run").textContent = runId;
   const outcomeLabel = outcome.status || "IN_PROGRESS";

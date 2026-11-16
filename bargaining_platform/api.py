@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 from copy import deepcopy
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -104,30 +105,46 @@ def run_events(run_id: str) -> dict[str, Any]:
         else:
             continue
         public_events.append(record)
-    return {"run_id": run_id, "events": public_events}
+    return {"run_id": run_id, "round_number": state.round_number, "events": public_events}
 
 
 def _public_action(action: dict) -> dict:
-    """Expose committed prices while hiding model-supplied/original price fields."""
+    """Expose effective prices without changing the proposal's base terms."""
     public = deepcopy(action)
     proposal = public.get("proposal")
     if not isinstance(proposal, dict):
         return public
     effective = proposal.get("effective_prices") or {}
+    effective_total = Decimal(0)
     for term in proposal.get("terms", []):
         item_id = term.get("item_id")
         if item_id in effective:
-            term["unit_price"] = effective[item_id]
-    proposal.pop("original_prices", None)
+            effective_unit_price = effective[item_id]
+            line_total = Decimal(str(effective_unit_price)) * term["quantity"]
+            term["effective_unit_price"] = effective_unit_price
+            term["effective_total_price"] = _serialize_money(line_total, effective_unit_price)
+            effective_total += line_total
+    proposal["effective_total_price"] = _serialize_money(effective_total, *effective.values())
     return public
+
+
+def _serialize_money(value: Decimal, *source_values: object) -> int | str:
+    """Keep integral integer amounts numeric and preserve fractional precision as text."""
+    if all(type(source) is int for source in source_values) and value == value.to_integral_value():
+        return int(value)
+    return format(value, "f")
 
 
 @app.get("/runs/{run_id}/view")
 def run_view(
     run_id: str,
     role: Literal["buyer", "seller"] = Query(..., description="Role-scoped view to return."),
+    agent_role: str | None = Header(default=None, alias="X-Agent-Role"),
 ) -> dict[str, Any]:
     """Reconstruct authoritative state and expose only the requested role's private view."""
+    # TODO: Replace this local role header with authenticated session binding before remote use.
+    if agent_role != role:
+        raise HTTPException(status_code=403, detail="Role view not authorized")
     try:
         state = replay_run(run_id, _db_path())
         return make_private_view(role, state)
