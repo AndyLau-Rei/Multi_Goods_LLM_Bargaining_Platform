@@ -1,0 +1,5 @@
+TEST PROMPT
+Objective: {objective}
+Private constraints: {private_constraints}
+Catalog: {catalog}
+Remaining rounds: {remaining_rounds}

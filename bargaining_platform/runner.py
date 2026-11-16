@@ -20,6 +20,8 @@ def run_llm_negotiation(
     db_path: str | Path = DEFAULT_DB_PATH,
     mock_demo: bool = False,
     condition_id: str | None = None,
+    seller_prompt_path: str | Path | None = None,
+    buyer_prompt_path: str | Path | None = None,
 ) -> NegotiationEngine:
     """Run role-scoped generation until a terminal outcome and persist the run."""
     if mock_demo:
@@ -33,7 +35,8 @@ def run_llm_negotiation(
         role = engine.state.current_actor
         adapter = adapters[role] if isinstance(adapters, dict) else adapters
         private_view = make_private_view(role, engine.state)
-        prompt = render_prompt(role, private_view)
+        prompt_path = seller_prompt_path if role == "seller" else buyer_prompt_path
+        prompt = render_prompt(role, private_view, template_path=prompt_path)
         generated = adapter.generate(prompt, _action_schema())
         parsed = parse_action(generated.text, role)
         engine.step(

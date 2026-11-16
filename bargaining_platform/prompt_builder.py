@@ -42,7 +42,11 @@ def make_private_view(role: str, state: GameState) -> dict:
     }
 
 
-def render_prompt(role: str, private_view: dict) -> str:
+def render_prompt(
+    role: str,
+    private_view: dict,
+    template_path: str | Path | None = None,
+) -> str:
     """Render an isolated private view as instructions for one negotiating role."""
     if role not in {"seller", "buyer"}:
         raise ValueError("Unknown negotiation role")
@@ -68,10 +72,12 @@ def render_prompt(role: str, private_view: dict) -> str:
         "proposal_id": "current-proposal-id",
         "proposal": None,
     }
-    template_path = _PROMPT_DIR / f"{role}_prompt.txt"
-    if not template_path.is_file():
-        raise FileNotFoundError(f"Prompt template not found: {template_path}")
-    template = template_path.read_text(encoding="utf-8")
+    selected_template = Path(template_path) if template_path is not None else (
+        _PROMPT_DIR / f"{role}_prompt_multi.txt"
+    )
+    if not selected_template.is_file():
+        raise FileNotFoundError(f"Prompt template not found: {selected_template}")
+    template = selected_template.read_text(encoding="utf-8")
     return template.format(
         objective=objective,
         private_constraints=json.dumps(profile, indent=2, sort_keys=True),

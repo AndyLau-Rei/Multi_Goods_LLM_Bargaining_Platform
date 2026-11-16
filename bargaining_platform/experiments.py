@@ -45,6 +45,8 @@ class ExperimentRunner:
         *,
         db_path: str | Path = DEFAULT_DB_PATH,
         condition_namespace: str | None = None,
+        seller_prompt_path: str | Path | None = None,
+        buyer_prompt_path: str | Path | None = None,
     ):
         self.config_path = Path(config) if isinstance(config, (str, Path)) else None
         if self.config_path is not None:
@@ -64,6 +66,8 @@ class ExperimentRunner:
         if any(not isinstance(variation, dict) for variation in variations):
             raise ValueError("each variation must be an object")
         self.db_path = Path(db_path)
+        self.seller_prompt_path = seller_prompt_path
+        self.buyer_prompt_path = buyer_prompt_path
         self.condition_namespace = condition_namespace or self.config.get("condition_namespace")
         if self.condition_namespace is None and self.config_path is not None:
             self.condition_namespace = self.config_path.stem
@@ -92,6 +96,8 @@ class ExperimentRunner:
                     db_path=self.db_path,
                     mock_demo=mock_demo,
                     condition_id=condition_id,
+                    seller_prompt_path=self.seller_prompt_path,
+                    buyer_prompt_path=self.buyer_prompt_path,
                 )
                 results.append(ExperimentResult(condition_id, run_id, engine.state.outcome.status if engine.state.outcome else None))
         return results

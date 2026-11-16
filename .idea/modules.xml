@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/Multi_Goods_LLM_Bargaining_Platform.iml" filepath="$PROJECT_DIR$/.idea/Multi_Goods_LLM_Bargaining_Platform.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/bargaining-platform.iml" filepath="$PROJECT_DIR$/.idea/bargaining-platform.iml" />
     </modules>
   </component>
 </project>

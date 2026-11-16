@@ -18,9 +18,22 @@ def main(argv: list[str] | None = None) -> int:
         experiment_parser = argparse.ArgumentParser(prog="python -m bargaining_platform.cli experiment")
         experiment_parser.add_argument("--config", required=True)
         experiment_parser.add_argument("--db-path", default=None)
+        experiment_parser.add_argument("--seller-prompt", default=None)
+        experiment_parser.add_argument("--buyer-prompt", default=None)
         args = experiment_parser.parse_args(argv[1:])
         try:
-            runner = ExperimentRunner(args.config, **({"db_path": args.db_path} if args.db_path else {}))
+            runner = ExperimentRunner(
+                args.config,
+                **{
+                    key: value
+                    for key, value in {
+                        "db_path": args.db_path,
+                        "seller_prompt_path": args.seller_prompt,
+                        "buyer_prompt_path": args.buyer_prompt,
+                    }.items()
+                    if value
+                },
+            )
             results = runner.run()
         except (OSError, ValueError, RuntimeError) as exc:
             print(f"ERROR: {exc}")
@@ -80,10 +93,14 @@ def main(argv: list[str] | None = None) -> int:
         print(format_failure_report(report))
         return 0
 
+    if argv and argv[0] == "run":
+        argv = argv[1:]
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--agent", choices=("scripted", "llm", "mock"), default="scripted")
-    args = parser.parse_args()
+    parser.add_argument("--seller-prompt", default=None)
+    parser.add_argument("--buyer-prompt", default=None)
+    args = parser.parse_args(argv)
 
     try:
         scenario = load_scenario(args.scenario)
@@ -105,8 +122,10 @@ def main(argv: list[str] | None = None) -> int:
             scenario,
             adapters,
             mock_demo=args.agent == "mock" or not os.getenv("LLM_API_KEY"),
+            seller_prompt_path=args.seller_prompt,
+            buyer_prompt_path=args.buyer_prompt,
         )
-    except (ValueError, RuntimeError) as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         print(f"ERROR: {exc}")
         return 1
     print(f"Completed negotiation: {engine.state.outcome.status} (run_id: {engine.run_id})")
