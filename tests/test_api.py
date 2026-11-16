@@ -20,6 +20,13 @@ def test_start_run_and_get_status(tmp_path, monkeypatch):
     status = TestClient(app).get(f"/runs/{run_id}/status")
     assert status.status_code == 200
     assert status.json()["outcome"]["status"] == "AGREEMENT"
+    serialized = json.dumps(status.json(), sort_keys=True)
+    assert "utility_metrics" not in serialized
+    assert "buyer_utility" not in serialized
+    assert "seller_utility" not in serialized
+    assert "joint_utility" not in serialized
+    assert "gft" not in serialized
+    assert "npb" not in serialized
 
 
 def test_view_privacy_isolation(tmp_path, monkeypatch):

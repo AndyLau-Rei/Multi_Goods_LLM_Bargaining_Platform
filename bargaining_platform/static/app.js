@@ -70,10 +70,10 @@ async function refresh(runId) {
   const outcomeLabel = outcome.status || "IN_PROGRESS";
   $("metric-outcome").textContent = outcomeLabel;
   $("metric-outcome").className = `rounded-full px-3 py-1 text-xs font-semibold ${outcomeLabel === "AGREEMENT" ? "bg-green-50 text-green-700" : outcomeLabel === "IN_PROGRESS" ? "bg-gray-100 text-gray-500" : "bg-amber-50 text-amber-700"}`;
-  const utilities = outcome.utility_metrics || {};
-  $("metric-buyer").textContent = money(utilities.buyer_utility);
-  $("metric-seller").textContent = money(utilities.seller_utility);
-  $("metric-joint").textContent = money(utilities.joint_utility);
+  const metrics = Object.values(status.metrics || {})[0] || {};
+  $("metric-agreement").textContent = money(metrics.agreement_rate);
+  $("metric-bundles").textContent = money(metrics.bundle_frequency);
+  $("metric-average-rounds").textContent = money(metrics.average_rounds);
   return outcome.status && outcome.status !== "IN_PROGRESS";
 }
 

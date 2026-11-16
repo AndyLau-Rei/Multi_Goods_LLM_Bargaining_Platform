@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from copy import deepcopy
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -40,7 +41,7 @@ class EventLogger:
 
     @property
     def events(self) -> tuple[Event, ...]:
-        return tuple(self._events)
+        return deepcopy(tuple(self._events))
 
     def append(
         self,
@@ -59,17 +60,27 @@ class EventLogger:
             timestamp=datetime.now(timezone.utc).isoformat(),
             event_type=event_type,
             actor=actor,
-            raw_output=json_safe(raw_output) if raw_output is not None else None,
-            parsed_action=json_safe(parsed_action) if parsed_action is not None else None,
+            raw_output=(
+                json_safe(deepcopy(raw_output)) if raw_output is not None else None
+            ),
+            parsed_action=(
+                json_safe(deepcopy(parsed_action))
+                if parsed_action is not None
+                else None
+            ),
             validation_result=(
-                json_safe(validation_result) if validation_result is not None else None
+                json_safe(deepcopy(validation_result))
+                if validation_result is not None
+                else None
             ),
             state_transition_summary=state_transition_summary,
             private_decision_summary=private_decision_summary,
-            metadata=json_safe(metadata) if metadata is not None else None,
+            metadata=(
+                json_safe(deepcopy(metadata)) if metadata is not None else None
+            ),
         )
         self._events.append(event)
-        return event
+        return deepcopy(event)
 
 
 def _json_text(value: Any) -> str:

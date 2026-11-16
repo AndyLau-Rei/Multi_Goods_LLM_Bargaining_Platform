@@ -28,6 +28,16 @@ app = FastAPI(title="Bargaining Platform API", version="0.1.0")
 _STATIC_DIR = Path(__file__).with_name("static")
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
+_PUBLIC_METRIC_FIELDS = {
+    "run_count",
+    "agreement_rate",
+    "no_deal_rate",
+    "average_rounds",
+    "bundle_frequency",
+    "average_discount_size",
+    "average_retries",
+}
+
 
 @app.get("/", response_class=HTMLResponse)
 def viewer() -> str:
@@ -42,6 +52,19 @@ class RunRequest(BaseModel):
 def _db_path() -> Path:
     """Allow deployments and tests to select a database without changing the API shape."""
     return Path(os.getenv("BARGAINING_DB_PATH", str(DEFAULT_DB_PATH)))
+
+
+def _public_metrics(metrics: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Keep private utility and valuation-derived fields out of public status."""
+    return {
+        condition: {
+            key: value
+            for key, value in values.items()
+            if key in _PUBLIC_METRIC_FIELDS
+        }
+        for condition, values in metrics.items()
+        if isinstance(values, dict)
+    }
 
 
 @app.post("/runs")
@@ -72,10 +95,14 @@ def run_status(run_id: str) -> dict[str, Any]:
         run = load_run_from_sqlite(run_id, _db_path())
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    outcome = run["outcome"] or {}
+    public_outcome = {
+        key: value for key, value in outcome.items() if key != "utility_metrics"
+    }
     return {
         "run_id": run_id,
-        "outcome": run["outcome"],
-        "metrics": calculate_metrics(_db_path(), run_id=run_id),
+        "outcome": public_outcome,
+        "metrics": _public_metrics(calculate_metrics(_db_path(), run_id=run_id)),
     }
 
 

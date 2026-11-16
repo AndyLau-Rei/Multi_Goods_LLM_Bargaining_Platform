@@ -155,7 +155,7 @@ pytest -q
 - `bargaining_platform/experiments.py` — repeated runs and config comparison.
 - `bargaining_platform/metrics.py` — aggregate metrics and failure reports.
 
-The project does not include a browser UI; the backend API is available for later clients.
+The negotiation viewer is available at `http://127.0.0.1:8000/` while the backend server is running.
 
 ## Backend API
 
@@ -182,3 +182,6 @@ Set `BARGAINING_DB_PATH` to use a different SQLite file. Role-scoped views are b
 The local `/view` endpoint derives the role from a Bearer token. Set both
 `BUYER_API_SECRET` and `SELLER_API_SECRET` before serving the API; requests are
 rejected when either secret is missing or both secrets are identical.
+The unauthenticated `/status` endpoint and viewer omit role utilities and
+valuation-derived metrics. Full utility metrics remain available through the
+local CLI and persisted run records.

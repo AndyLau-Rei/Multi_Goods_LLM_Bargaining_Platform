@@ -5,6 +5,7 @@ from bargaining_platform.engine import NegotiationEngine
 from bargaining_platform.models import Action, Condition, Proposal, Term, ValidationResult
 from bargaining_platform.scenario import load_scenario
 from bargaining_platform.storage import (
+    EventLogger,
     export_run_to_jsonl,
     load_run_from_sqlite,
     save_run_to_sqlite,
@@ -48,6 +49,32 @@ def test_event_log_append_only():
     assert events[1].state_transition_summary == "Proposal updated; turn switched to buyer"
     assert events[-1].state_transition_summary == "Proposal accepted; game ended"
     assert isinstance(events, tuple)
+
+
+def test_event_payloads_are_detached_from_logger():
+    logger = EventLogger()
+    parsed_action = {"proposal": {"terms": [{"item_id": "A"}]}}
+    validation_result = {"ok": True}
+    raw_output = {"text": "raw"}
+
+    appended = logger.append(
+        "ACTION_ATTEMPT",
+        "seller",
+        raw_output=raw_output,
+        parsed_action=parsed_action,
+        validation_result=validation_result,
+    )
+    parsed_action["proposal"]["terms"][0]["item_id"] = "changed"
+    validation_result["ok"] = False
+    raw_output["text"] = "changed"
+    appended.parsed_action["proposal"]["terms"][0]["item_id"] = "changed-again"
+    snapshot = logger.events
+    snapshot[0].validation_result["ok"] = False
+
+    stored = logger.events[0]
+    assert stored.parsed_action["proposal"]["terms"][0]["item_id"] == "A"
+    assert stored.validation_result["ok"] is True
+    assert stored.raw_output == {"text": "raw"}
 
 
 def test_invalid_action_logged():
