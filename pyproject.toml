@@ -8,10 +8,13 @@ version = "0.1.0"
 requires-python = ">=3.10"
 
 [project.optional-dependencies]
-dev = ["pytest", "fastapi", "uvicorn", "httpx2"]
+dev = ["pytest", "fastapi", "uvicorn", "httpx"]
 
 [tool.setuptools.packages.find]
 include = ["bargaining_platform*"]
+
+[tool.setuptools.package-data]
+bargaining_platform = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

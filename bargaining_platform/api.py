@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .metrics import calculate_metrics
@@ -18,6 +21,13 @@ from .storage import DEFAULT_DB_PATH, load_run_from_sqlite, replay_run
 
 
 app = FastAPI(title="Bargaining Platform API", version="0.1.0")
+_STATIC_DIR = Path(__file__).with_name("static")
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+
+@app.get("/", response_class=HTMLResponse)
+def viewer() -> str:
+    return (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
 
 class RunRequest(BaseModel):
@@ -67,27 +77,49 @@ def run_status(run_id: str) -> dict[str, Any]:
 
 @app.get("/runs/{run_id}/events")
 def run_events(run_id: str) -> dict[str, Any]:
-    """Return public event fields; prompts and private engine summaries stay server-side."""
+    """Return replayed public actions and transition summaries only."""
     try:
         run = load_run_from_sqlite(run_id, _db_path())
+        state = replay_run(run_id, _db_path())
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    public_events = [
-        {
-            key: event[key]
-            for key in (
-                "event_id",
-                "timestamp",
-                "event_type",
-                "actor",
-                "parsed_action",
-                "validation_result",
-                "state_transition_summary",
-            )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail="Run could not be replayed") from exc
+
+    transcript = iter(state.public_transcript)
+    public_events = []
+    for event in run["events"]:
+        record = {
+            "event_id": event["event_id"],
+            "event_type": event["event_type"],
+            "actor": event["actor"],
         }
-        for event in run["events"]
-    ]
+        if event["event_type"] == "ACTION_ATTEMPT":
+            # Validation is used internally to identify committed actions only.
+            if not (event.get("validation_result") or {}).get("ok"):
+                continue
+            record["public_transcript"] = _public_action(next(transcript))
+        elif event["event_type"] == "STATE_TRANSITION":
+            record["state_transition_summary"] = event["state_transition_summary"]
+        else:
+            continue
+        public_events.append(record)
     return {"run_id": run_id, "events": public_events}
+
+
+def _public_action(action: dict) -> dict:
+    """Expose committed prices while hiding model-supplied/original price fields."""
+    public = deepcopy(action)
+    proposal = public.get("proposal")
+    if not isinstance(proposal, dict):
+        return public
+    effective = proposal.get("effective_prices") or {}
+    for term in proposal.get("terms", []):
+        item_id = term.get("item_id")
+        if item_id in effective:
+            term["unit_price"] = effective[item_id]
+    proposal.pop("original_prices", None)
+    return public
 
 
 @app.get("/runs/{run_id}/view")

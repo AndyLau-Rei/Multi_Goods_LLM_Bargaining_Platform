@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Negotiation Viewer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { theme: { extend: { fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'] } } } };
+  </script>
+</head>
+<body class="min-h-screen bg-gray-50 font-sans text-gray-900 antialiased">
+  <main class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+    <header class="mb-8">
+      <p class="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">Bargaining Platform</p>
+      <h1 class="text-3xl font-semibold tracking-tight text-gray-950 sm:text-4xl">Negotiation Viewer</h1>
+      <p class="mt-2 text-sm text-gray-500">Follow public offers, bundle terms, and final outcomes.</p>
+    </header>
+
+    <div class="grid gap-6 lg:grid-cols-[minmax(0,7fr)_minmax(240px,3fr)]">
+      <section>
+        <section class="mb-6 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm" aria-label="Run controls">
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="text-xs font-medium text-gray-500">Scenario
+              <select id="scenario" class="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800 outline-none transition focus:border-gray-400 focus:ring-2 focus:ring-gray-100">
+                <option value="scenarios/shop_bundle.json">Shop bundle</option>
+              </select>
+            </label>
+            <label class="text-xs font-medium text-gray-500">Agent
+              <select id="agent" class="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800 outline-none transition focus:border-gray-400 focus:ring-2 focus:ring-gray-100">
+                <option value="mock">Mock</option><option value="llm">LLM</option>
+              </select>
+            </label>
+            <label class="text-xs font-medium text-gray-500 sm:col-span-2">Load existing Run ID
+              <input id="run-id" type="text" placeholder="run-..." class="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800 outline-none transition placeholder:text-gray-300 focus:border-gray-400 focus:ring-2 focus:ring-gray-100">
+            </label>
+          </div>
+          <div class="mt-4 flex flex-wrap items-center gap-3">
+            <button id="start" class="rounded-xl bg-gray-950 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-black focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2">Start Negotiation</button>
+            <button id="load" class="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-200">Load Run</button>
+          </div>
+        </section>
+
+        <p id="message" class="mb-4 min-h-5 text-sm text-gray-400" role="status"></p>
+        <section class="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm sm:p-6">
+          <div class="mb-5 flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-gray-900">Public Transcript</h2>
+            <span class="text-xs text-gray-400">Live</span>
+          </div>
+          <div id="transcript" class="min-h-[22rem] space-y-6"><p class="text-sm text-gray-400">Start or load a run.</p></div>
+        </section>
+      </section>
+
+      <aside class="h-fit rounded-2xl border border-gray-100 bg-white p-5 shadow-sm sm:p-6">
+        <div class="mb-6 flex items-start justify-between gap-3">
+          <div>
+            <p class="text-xs font-medium uppercase tracking-wide text-gray-400">Run metrics</p>
+            <p id="metric-run" class="mt-1 truncate text-xs text-gray-500">—</p>
+          </div>
+          <span id="metric-outcome" class="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-500">—</span>
+        </div>
+        <dl class="space-y-5">
+          <div class="flex items-end justify-between border-b border-gray-100 pb-4"><dt class="text-sm text-gray-500">Round</dt><dd id="metric-round" class="text-lg font-semibold text-gray-900">—</dd></div>
+          <div><dt class="text-xs uppercase tracking-wide text-gray-400">Buyer utility</dt><dd id="metric-buyer" class="mt-1 text-3xl font-semibold tracking-tight text-gray-950">—</dd></div>
+          <div><dt class="text-xs uppercase tracking-wide text-gray-400">Seller utility</dt><dd id="metric-seller" class="mt-1 text-3xl font-semibold tracking-tight text-gray-950">—</dd></div>
+          <div><dt class="text-xs uppercase tracking-wide text-gray-400">Joint utility</dt><dd id="metric-joint" class="mt-1 text-3xl font-semibold tracking-tight text-gray-950">—</dd></div>
+        </dl>
+      </aside>
+    </div>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
