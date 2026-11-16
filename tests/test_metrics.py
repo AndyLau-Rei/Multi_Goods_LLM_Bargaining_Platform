@@ -45,12 +45,20 @@ def test_metrics_agreement_rate_gft_and_npb(tmp_path):
     proposal = _proposal()
     agreement.step(Action("PROPOSE", proposal.proposal_id, proposal))
     agreement.step(Action("ACCEPT", proposal.proposal_id))
-    save_run_to_sqlite("agreement", scenario, agreement.state.outcome, agreement.event_logger.events, tmp_path / "runs.db", condition_id="baseline")
+    save_run_to_sqlite(
+        "agreement", scenario, agreement.state.outcome,
+        agreement.event_logger.events, tmp_path / "runs.db",
+        condition_id="baseline",
+    )
 
     no_deal = NegotiationEngine(scenario)
     no_deal.step(Action("PROPOSE", proposal.proposal_id, proposal))
     no_deal.step(Action("WALK_AWAY"))
-    save_run_to_sqlite("no-deal", scenario, no_deal.state.outcome, no_deal.event_logger.events, tmp_path / "runs.db", condition_id="baseline")
+    save_run_to_sqlite(
+        "no-deal", scenario, no_deal.state.outcome,
+        no_deal.event_logger.events, tmp_path / "runs.db",
+        condition_id="baseline",
+    )
 
     metrics = calculate_metrics(tmp_path / "runs.db")["baseline"]
     assert metrics["agreement_rate"] == 0.5

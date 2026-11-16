@@ -12,10 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from .model_adapter import MockLLMAdapter, OpenAIAdapter
+from .models import validate_scenario
 from .runner import default_mock_adapters, run_llm_negotiation
 from .scenario import load_scenario
 from .storage import DEFAULT_DB_PATH
-from .models import validate_scenario
 
 
 @dataclass(frozen=True)
@@ -99,7 +99,13 @@ class ExperimentRunner:
                     seller_prompt_path=self.seller_prompt_path,
                     buyer_prompt_path=self.buyer_prompt_path,
                 )
-                results.append(ExperimentResult(condition_id, run_id, engine.state.outcome.status if engine.state.outcome else None))
+                results.append(
+                    ExperimentResult(
+                        condition_id,
+                        run_id,
+                        engine.state.outcome.status if engine.state.outcome else None,
+                    )
+                )
         return results
 
     def _scenario_path(self) -> Path:
@@ -141,22 +147,36 @@ def _budget_safe_mock_adapters(scenario: dict) -> dict[str, MockLLMAdapter]:
     budget = _buyer_budget(scenario)
     if budget < 80:
         return {
-            "seller": MockLLMAdapter([json.dumps({"action_type": "WALK_AWAY", "proposal_id": None})]),
+            "seller": MockLLMAdapter([
+                json.dumps({"action_type": "WALK_AWAY", "proposal_id": None})
+            ]),
             "buyer": MockLLMAdapter([]),
         }
     price = min(120, budget)
     proposal = {
         "proposal_id": "experiment-a",
         "acceptance_mode": "all_or_nothing",
-        "terms": [{"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": price, "unit": "piece"}],
+        "terms": [
+            {
+                "type": "purchase", "item_id": "A", "quantity": 1,
+                "unit_price": price, "unit": "piece",
+            }
+        ],
         "conditions": [],
         "decision_summary": "",
         "original_prices": {"A": price},
         "effective_prices": {"A": price},
     }
     return {
-        "seller": MockLLMAdapter([json.dumps({"action_type": "PROPOSE", "proposal_id": "experiment-a", "proposal": proposal})]),
-        "buyer": MockLLMAdapter([json.dumps({"action_type": "ACCEPT", "proposal_id": "experiment-a"})]),
+        "seller": MockLLMAdapter([
+            json.dumps({
+                "action_type": "PROPOSE", "proposal_id": "experiment-a",
+                "proposal": proposal,
+            })
+        ]),
+        "buyer": MockLLMAdapter([
+            json.dumps({"action_type": "ACCEPT", "proposal_id": "experiment-a"})
+        ]),
     }
 
 
@@ -174,7 +194,10 @@ def _no_bundle_mock_adapters() -> dict[str, MockLLMAdapter]:
     }
     return {
         "seller": MockLLMAdapter([
-            json.dumps({"action_type": "PROPOSE", "proposal_id": "baseline-a", "proposal": proposal})
+            json.dumps({
+                "action_type": "PROPOSE", "proposal_id": "baseline-a",
+                "proposal": proposal,
+            })
         ]),
         "buyer": MockLLMAdapter([
             json.dumps({"action_type": "ACCEPT", "proposal_id": "baseline-a"})
@@ -225,7 +248,8 @@ def format_comparison(
         ("Bundle Frequency", "bundle_frequency"),
     )
     lines = [
-        "Metric                  Condition A (Baseline: No Bundles)  Condition B (Treatment: Bundles Enabled)",
+        "Metric                  Condition A (Baseline: No Bundles)  "
+        "Condition B (Treatment: Bundles Enabled)",
         "-" * 102,
     ]
     for label, key in rows:

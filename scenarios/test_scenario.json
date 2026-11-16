@@ -1,29 +1,30 @@
 {
-  "scenario_id": "test-scenario",
-  "max_rounds": 3,
+  "scenario_id": "test_scenario",
+  "max_rounds": 8,
   "starting_role": "seller",
   "catalog": [
-    {"id": "A", "type": "product", "unit": "piece", "seller_stock": 5}
+    {"id": "A", "type": "product", "unit": "piece", "seller_stock": 20},
+    {"id": "B", "type": "product", "unit": "piece", "seller_stock": 20}
   ],
   "private_profiles": {
     "seller": {
-      "unit_cost": {"A": 70},
-      "minimum_unit_price": {"A": 80},
-      "reservation_utility": 0,
+      "unit_cost": {"A": 70, "B": 35},
+      "minimum_unit_price": {"A": 80, "B": 40},
+      "reservation_utility": 100,
       "allowed_actions": ["PROPOSE", "COUNTER", "ACCEPT", "WALK_AWAY"]
     },
     "buyer": {
-      "unit_value": {"A": 130},
-      "budget": 150,
-      "reservation_utility": 0,
+      "unit_value": {"A": 130, "B": 75},
+      "budget": 200,
+      "reservation_utility": 150,
       "allowed_actions": ["ACCEPT", "COUNTER", "WALK_AWAY"]
     }
   },
   "legal_ranges": {
-    "max_quantity": {"A": 5}
+    "max_quantity": {"A": 5, "B": 5}
   },
   "bundle_rules": {
-    "max_discount_per_unit": 0,
+    "max_discount_per_unit": 30,
     "allowed_condition_types": ["discount_if_item_in_bundle"]
   }
 }

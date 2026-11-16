@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import time
 from abc import ABC, abstractmethod
 from collections import deque
@@ -135,7 +134,7 @@ class OpenAIAdapter(BaseLLMAdapter):
 def _retryable(error: Exception) -> bool:
     if isinstance(error, HTTPError):
         return error.code == 408 or error.code == 429 or error.code >= 500
-    return isinstance(error, (URLError, TimeoutError, ConnectionError, socket.timeout))
+    return isinstance(error, (URLError, TimeoutError, ConnectionError))
 
 
 def _response_text(response: dict) -> str:

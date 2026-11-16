@@ -11,6 +11,10 @@ _PUBLIC_CATALOG_FIELDS = ("id", "type", "unit", "seller_stock")
 _PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 
+def _prompt_json(value: object) -> str:
+    return json.dumps(json_safe(deepcopy(value)), indent=2, sort_keys=True)
+
+
 def make_private_view(role: str, state: GameState) -> dict:
     """Return a detached role-scoped view of the public negotiation state."""
     if role not in {"seller", "buyer"}:
@@ -53,10 +57,6 @@ def render_prompt(
     if not isinstance(private_view, dict) or private_view.get("role") != role:
         raise ValueError("Private view does not match the requested role")
 
-    profile = json_safe(deepcopy(private_view.get("private_profile", {})))
-    catalog = json_safe(deepcopy(private_view.get("catalog", [])))
-    active_proposal = json_safe(deepcopy(private_view.get("active_proposal")))
-    transcript = json_safe(deepcopy(private_view.get("public_transcript", [])))
     objective = (
         "maximize seller utility: effective payment minus fulfillment costs"
         if role == "seller"
@@ -80,11 +80,11 @@ def render_prompt(
     template = selected_template.read_text(encoding="utf-8")
     return template.format(
         objective=objective,
-        private_constraints=json.dumps(profile, indent=2, sort_keys=True),
-        catalog=json.dumps(catalog, indent=2, sort_keys=True),
-        active_proposal=json.dumps(active_proposal, indent=2, sort_keys=True),
-        transcript=json.dumps(transcript, indent=2, sort_keys=True),
+        private_constraints=_prompt_json(private_view.get("private_profile", {})),
+        catalog=_prompt_json(private_view.get("catalog", [])),
+        active_proposal=_prompt_json(private_view.get("active_proposal")),
+        transcript=_prompt_json(private_view.get("public_transcript", [])),
         remaining_rounds=private_view.get("remaining_rounds"),
-        action_schema=json.dumps(action_schema, indent=2, sort_keys=True),
-        example=json.dumps(example, indent=2, sort_keys=True),
+        action_schema=_prompt_json(action_schema),
+        example=_prompt_json(example),
     )

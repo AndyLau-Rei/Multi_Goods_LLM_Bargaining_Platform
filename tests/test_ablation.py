@@ -26,7 +26,9 @@ def test_compare_command_runs_both_configs_and_reports(tmp_path, capsys):
     assert output.strip()
 
     baseline = ExperimentRunner("configs/ablation_no_bundle.json", db_path=tmp_path / "a.db").run()
-    treatment = ExperimentRunner("configs/ablation_with_bundle.json", db_path=tmp_path / "b.db").run()
+    treatment = ExperimentRunner(
+        "configs/ablation_with_bundle.json", db_path=tmp_path / "b.db"
+    ).run()
     assert baseline[0].condition_id != treatment[0].condition_id
 
 

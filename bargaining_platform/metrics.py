@@ -10,8 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import GameState, Proposal, ValidationResult, json_safe
-from .storage import DEFAULT_DB_PATH, _create_schema
-from .storage import load_run_from_sqlite
+from .storage import DEFAULT_DB_PATH, _create_schema, load_run_from_sqlite
 from .validator import calculate_effective_totals
 
 
@@ -244,7 +243,10 @@ def _aggregate(runs: list[dict[str, Any]]) -> dict[str, float | int | None]:
         name: [_number(run["outcome"].get("utility_metrics", {}).get(name)) for run in agreements]
         for name in ("buyer_utility", "seller_utility", "joint_utility")
     }
-    utility_values = {name: [value for value in values if value is not None] for name, values in utility_values.items()}
+    utility_values = {
+        name: [value for value in values if value is not None]
+        for name, values in utility_values.items()
+    }
     bundle_runs = [run for run in agreements if _is_bundle(run["proposal"])]
     discounts = [_discount_size(run["proposal"]) for run in bundle_runs]
     paper = [_paper_metrics(run) for run in agreements]
@@ -258,22 +260,18 @@ def _aggregate(runs: list[dict[str, Any]]) -> dict[str, float | int | None]:
 
     result: dict[str, float | int | None] = {
         "run_count": total,
-        "agreement_rate": len(agreements) / total if total else 0.0,
-        "no_deal_rate": len(no_deals) / total if total else 0.0,
+        "agreement_rate": len(agreements) / total,
+        "no_deal_rate": len(no_deals) / total,
         "average_buyer_utility": mean(utility_values["buyer_utility"]),
         "average_seller_utility": mean(utility_values["seller_utility"]),
         "average_joint_utility": mean(utility_values["joint_utility"]),
-        "average_rounds": (
-            sum((run["valid_count"] + 1) // 2 for run in runs) / total if total else 0.0
-        ),
+        "average_rounds": sum((run["valid_count"] + 1) // 2 for run in runs) / total,
         "bundle_frequency": len(bundle_runs) / len(agreements) if agreements else 0.0,
         "average_discount_size": mean(discounts),
         "average_retries": sum(
             sum(attempt["validation"].get("ok") is not True for attempt in run["attempts"])
             for run in runs
-        ) / total
-        if total
-        else 0.0,
+        ) / total,
         "gft": mean(gft),
         "npb": mean(npb),
         "ir": sum(ir_values) / len(ir_values) if ir_values else None,
@@ -298,7 +296,12 @@ def _paper_metrics(run: dict[str, Any]) -> dict[str, Fraction | None | bool]:
         item_id = term.get("item_id")
         quantity = _fraction(term.get("quantity"))
         unit_price = _price(proposal, item_id, term.get("unit_price"))
-        if item_id not in buyer_values or item_id not in seller_costs or unit_price is None or quantity is None:
+        if (
+            item_id not in buyer_values
+            or item_id not in seller_costs
+            or unit_price is None
+            or quantity is None
+        ):
             return {"gft": None, "npb": None, "ir": None}
         value += quantity * _fraction(buyer_values[item_id])
         cost += quantity * _fraction(seller_costs[item_id])
@@ -324,7 +327,9 @@ def _discount_size(proposal: dict[str, Any] | None) -> Fraction | None:
     for term in proposal.get("terms", []):
         item_id = term.get("item_id")
         original_price = _fraction(original.get(item_id, term.get("unit_price")))
-        effective_price = _fraction(effective.get(item_id, original.get(item_id, term.get("unit_price"))))
+        effective_price = _fraction(
+            effective.get(item_id, original.get(item_id, term.get("unit_price")))
+        )
         quantity = _fraction(term.get("quantity"))
         if original_price is None or effective_price is None or quantity is None:
             return None
@@ -334,7 +339,9 @@ def _discount_size(proposal: dict[str, Any] | None) -> Fraction | None:
     return sum(discounts, Fraction(0)) / len(discounts) if discounts else Fraction(0)
 
 
-def _authoritative_proposal(proposal_data: dict[str, Any], scenario: dict[str, Any]) -> dict[str, Any]:
+def _authoritative_proposal(
+    proposal_data: dict[str, Any], scenario: dict[str, Any]
+) -> dict[str, Any]:
     """Recompute prices from typed terms and conditions, ignoring logged price outputs."""
     data = json.loads(json.dumps(proposal_data))
     data.setdefault("decision_summary", "")

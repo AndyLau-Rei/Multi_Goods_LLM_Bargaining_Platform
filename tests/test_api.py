@@ -2,7 +2,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from bargaining_platform.api import app
+from bargaining_platform.api import _public_action, app
 from bargaining_platform.model_adapter import MockLLMAdapter
 from bargaining_platform.runner import run_llm_negotiation
 from bargaining_platform.scenario import load_scenario
@@ -24,6 +24,8 @@ def test_start_run_and_get_status(tmp_path, monkeypatch):
 
 def test_view_privacy_isolation(tmp_path, monkeypatch):
     monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
+    monkeypatch.setenv("BUYER_API_SECRET", "buyer-secret")
+    monkeypatch.setenv("SELLER_API_SECRET", "seller-secret")
     client = TestClient(app)
     run_id = client.post(
         "/runs",
@@ -32,8 +34,7 @@ def test_view_privacy_isolation(tmp_path, monkeypatch):
 
     response = client.get(
         f"/runs/{run_id}/view",
-        params={"role": "buyer"},
-        headers={"X-Agent-Role": "buyer"},
+        headers={"Authorization": "Bearer buyer-secret"},
     )
     assert response.status_code == 200
     serialized = json.dumps(response.json(), sort_keys=True)
@@ -42,11 +43,25 @@ def test_view_privacy_isolation(tmp_path, monkeypatch):
     assert '"70"' not in serialized
     assert '"80"' not in serialized
 
-    assert client.get(f"/runs/{run_id}/view", params={"role": "seller"}).status_code == 403
+    assert client.get(f"/runs/{run_id}/view").status_code == 403
+    assert client.get(
+        f"/runs/{run_id}/view",
+        headers={"Authorization": "Bearer wrong"},
+    ).status_code == 403
     assert client.get(
         f"/runs/{run_id}/view",
         params={"role": "seller"},
-        headers={"X-Agent-Role": "buyer"},
+        headers={"Authorization": "Bearer buyer-secret"},
+    ).json()["role"] == "buyer"
+    assert client.get(
+        f"/runs/{run_id}/view",
+        headers={"Authorization": "Bearer seller-secret"},
+    ).json()["role"] == "seller"
+
+    monkeypatch.setenv("SELLER_API_SECRET", "buyer-secret")
+    assert client.get(
+        f"/runs/{run_id}/view",
+        headers={"Authorization": "Bearer buyer-secret"},
     ).status_code == 403
 
 
@@ -55,9 +70,9 @@ def test_viewer_page_and_static_mount():
     page = client.get("/")
     assert page.status_code == 200
     assert "Negotiation Viewer" in page.text
-    static = client.get("/static/style.css")
+    static = client.get("/static/app.js")
     assert static.status_code == 200
-    assert "transcript" in static.text
+    assert "renderEvents" in static.text
 
 
 def test_events_show_authoritative_effective_bundle_price(tmp_path, monkeypatch):
@@ -82,10 +97,20 @@ def test_events_show_authoritative_effective_bundle_price(tmp_path, monkeypatch)
         "effective_prices": {"A": 120, "B": 60},
     }
     actions = {
-        "seller": MockLLMAdapter([json.dumps({"action_type": "PROPOSE", "proposal_id": "discounted", "proposal": proposal})]),
-        "buyer": MockLLMAdapter([json.dumps({"action_type": "ACCEPT", "proposal_id": "discounted"})]),
+        "seller": MockLLMAdapter([
+            json.dumps({
+                "action_type": "PROPOSE", "proposal_id": "discounted",
+                "proposal": proposal,
+            })
+        ]),
+        "buyer": MockLLMAdapter([
+            json.dumps({"action_type": "ACCEPT", "proposal_id": "discounted"})
+        ]),
     }
-    run_llm_negotiation(scenario, actions, run_id="discounted", db_path=tmp_path / "runs.db", mock_demo=True)
+    run_llm_negotiation(
+        scenario, actions, run_id="discounted",
+        db_path=tmp_path / "runs.db", mock_demo=True,
+    )
 
     response = TestClient(app).get("/runs/discounted/events")
     assert response.status_code == 200
@@ -101,3 +126,74 @@ def test_events_show_authoritative_effective_bundle_price(tmp_path, monkeypatch)
     assert "raw_output" not in serialized
     assert "metadata" not in serialized
     assert "private_decision_summary" not in serialized
+
+
+def test_api_effective_totals_preserve_large_integers():
+    price = 10**40 + 1
+    action = {
+        "proposal": {
+            "terms": [{"item_id": "A", "quantity": 2, "unit_price": price}],
+            "effective_prices": {"A": price},
+        }
+    }
+    proposal = _public_action(action)["proposal"]
+    assert proposal["terms"][0]["unit_price"] == price
+    assert proposal["terms"][0]["effective_total_price"] == 2 * price
+    assert proposal["effective_total_price"] == 2 * price
+
+
+def test_api_round_display_with_retries(tmp_path, monkeypatch):
+    monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
+    scenario = load_scenario("scenarios/shop_bundle.json")
+    proposal = {
+        "proposal_id": "retry-round",
+        "acceptance_mode": "all_or_nothing",
+        "terms": [
+            {
+                "type": "purchase", "item_id": "A", "quantity": 1,
+                "unit_price": 120, "unit": "piece",
+            }
+        ],
+        "conditions": [], "decision_summary": "",
+        "original_prices": {"A": 120}, "effective_prices": {"A": 120},
+    }
+    adapters = {
+        "seller": MockLLMAdapter([
+            json.dumps({
+                "action_type": "PROPOSE", "proposal_id": "retry-round",
+                "proposal": proposal,
+            }),
+            "bad", "still bad",
+        ]),
+        "buyer": MockLLMAdapter([
+            json.dumps({
+                "action_type": "COUNTER", "proposal_id": "retry-round",
+                "proposal": proposal,
+            })
+        ]),
+    }
+    run_llm_negotiation(
+        scenario, adapters, run_id="retry-round",
+        db_path=tmp_path / "runs.db", mock_demo=True,
+    )
+    response = TestClient(app).get("/runs/retry-round/events")
+    assert response.status_code == 200
+    assert response.json()["round_number"] == 2
+
+
+def test_api_empty_action_shows_transitions(tmp_path, monkeypatch):
+    monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
+    scenario = load_scenario("scenarios/shop_bundle.json")
+    adapters = {"seller": MockLLMAdapter(["bad", "still bad"]), "buyer": MockLLMAdapter([])}
+    run_llm_negotiation(
+        scenario, adapters, run_id="empty-actions",
+        db_path=tmp_path / "runs.db", mock_demo=True,
+    )
+    response = TestClient(app).get("/runs/empty-actions/events")
+    assert response.status_code == 200
+    assert not any(event["event_type"] == "ACTION_ATTEMPT" for event in response.json()["events"])
+    assert any(
+        event["event_type"] == "STATE_TRANSITION"
+        and event["state_transition_summary"] == "Game ended: invalid action retry exhausted"
+        for event in response.json()["events"]
+    )

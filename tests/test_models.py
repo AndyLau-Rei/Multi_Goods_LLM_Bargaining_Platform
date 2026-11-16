@@ -41,7 +41,10 @@ def test_original_and_effective_prices_are_distinct():
 def test_nested_models_round_trip():
     proposal = Proposal("offer-03", "all_or_nothing", [], [], "", {}, {})
     action = Action("PROPOSE", proposal.proposal_id, proposal)
-    state = GameState("buyer", 1, proposal, [action.to_dict()], Outcome("AGREEMENT", proposal.proposal_id))
+    state = GameState(
+        "buyer", 1, proposal, [action.to_dict()],
+        Outcome("AGREEMENT", proposal.proposal_id),
+    )
     result = ValidationResult(False, "INVALID", "Rejected")
 
     assert Action.from_dict(action.to_dict()) == action

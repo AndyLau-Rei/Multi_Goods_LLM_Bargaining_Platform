@@ -24,11 +24,17 @@ def calculate_utilities(proposal: Proposal, state: GameState) -> dict[str, Decim
     buyer_values = state.private_profiles["buyer"]["unit_value"]
     seller_costs = state.private_profiles["seller"]["unit_cost"]
     value = sum(
-        (term.quantity * Fraction(Decimal(str(buyer_values[term.item_id]))) for term in proposal.terms),
+        (
+            term.quantity * Fraction(Decimal(str(buyer_values[term.item_id])))
+            for term in proposal.terms
+        ),
         Fraction(0),
     )
     cost = sum(
-        (term.quantity * Fraction(Decimal(str(seller_costs[term.item_id]))) for term in proposal.terms),
+        (
+            term.quantity * Fraction(Decimal(str(seller_costs[term.item_id])))
+            for term in proposal.terms
+        ),
         Fraction(0),
     )
     buyer = _decimal(value - payment)
@@ -45,7 +51,10 @@ def validate_reservation_utilities(proposal: Proposal, state: GameState) -> Vali
     seller = state.private_profiles["seller"]
     buyer = state.private_profiles["buyer"]
     if "reservation_utility" not in seller or "reservation_utility" not in buyer:
-        return ValidationResult(False, "UTILITY_NOT_IMPLEMENTED", "Acceptance requirements cannot be checked")
+        return ValidationResult(
+            False, "UTILITY_NOT_IMPLEMENTED",
+            "Acceptance requirements cannot be checked",
+        )
     utilities = calculate_utilities(proposal, state)
     if (
         utilities["buyer_utility"] < Decimal(str(buyer["reservation_utility"]))

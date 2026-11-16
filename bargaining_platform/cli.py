@@ -25,10 +25,18 @@ def _parser() -> argparse.ArgumentParser:
 
     run = commands.add_parser("run", help="Run one negotiation from a scenario.")
     run.add_argument("--scenario", required=True, help="Path to the scenario JSON file.")
-    run.add_argument("--agent", choices=("scripted", "llm", "mock"), default="scripted", help="Agent mode (default: scripted).")
+    run.add_argument(
+        "--agent",
+        choices=("scripted", "llm", "mock"),
+        default="scripted",
+        help="Agent mode (default: scripted).",
+    )
     run.add_argument("--seller-prompt", help="Optional seller prompt template path.")
     run.add_argument("--buyer-prompt", help="Optional buyer prompt template path.")
-    run.add_argument("--db-path", default=None, help="SQLite output path (default: results/runs.db).")
+    run.add_argument(
+        "--db-path", default=None,
+        help="SQLite output path (default: results/runs.db).",
+    )
 
     experiment = commands.add_parser("experiment", help="Run a batch experiment configuration.")
     experiment.add_argument("--config", required=True, help="Experiment configuration JSON path.")
@@ -36,19 +44,35 @@ def _parser() -> argparse.ArgumentParser:
     experiment.add_argument("--seller-prompt", help="Optional seller prompt template path.")
     experiment.add_argument("--buyer-prompt", help="Optional buyer prompt template path.")
 
-    compare = commands.add_parser("compare", help="Run and compare two single-condition experiments.")
-    compare.add_argument("--config-a", required=True, help="Baseline experiment configuration JSON path.")
-    compare.add_argument("--config-b", required=True, help="Treatment experiment configuration JSON path.")
+    compare = commands.add_parser(
+        "compare", help="Run and compare two single-condition experiments."
+    )
+    compare.add_argument(
+        "--config-a", required=True,
+        help="Baseline experiment configuration JSON path.",
+    )
+    compare.add_argument(
+        "--config-b", required=True,
+        help="Treatment experiment configuration JSON path.",
+    )
     compare.add_argument("--db-path", default=None, help="SQLite output path.")
 
     metrics = commands.add_parser("metrics", help="Calculate metrics from persisted runs.")
     selection = metrics.add_mutually_exclusive_group(required=True)
     selection.add_argument("--run-id", help="Calculate metrics for one persisted run.")
     selection.add_argument("--condition-id", help="Calculate metrics for one experiment condition.")
-    selection.add_argument("--all", action="store_true", help="Calculate metrics for every condition.")
-    metrics.add_argument("--db-path", default=None, help="SQLite input path (default: results/runs.db).")
+    selection.add_argument(
+        "--all", action="store_true",
+        help="Calculate metrics for every condition.",
+    )
+    metrics.add_argument(
+        "--db-path", default=None,
+        help="SQLite input path (default: results/runs.db).",
+    )
 
-    failures = commands.add_parser("failures", help="Generate a structured failure report for one run.")
+    failures = commands.add_parser(
+        "failures", help="Generate a structured failure report for one run."
+    )
     failures.add_argument("--run-id", required=True, help="Persisted run ID.")
     failures.add_argument("--db-path", default=None, help="SQLite input path.")
 
@@ -65,30 +89,29 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _run(args: argparse.Namespace) -> int:
-    try:
-        scenario = load_scenario(args.scenario)
-        if args.agent == "scripted":
-            print(f"Loaded scenario: {scenario['scenario_id']} with {len(scenario['catalog'])} catalog items")
-            return 0
-        use_mock = args.agent == "mock" or not os.getenv("LLM_API_KEY")
-        if use_mock:
-            adapters = default_mock_adapters()
-        else:
-            adapter = OpenAIAdapter()
-            adapters = {"seller": adapter, "buyer": adapter}
-        engine = run_llm_negotiation(
-            scenario,
-            adapters,
-            db_path=args.db_path or "results/runs.db",
-            mock_demo=use_mock,
-            seller_prompt_path=args.seller_prompt,
-            buyer_prompt_path=args.buyer_prompt,
+    scenario = load_scenario(args.scenario)
+    if args.agent == "scripted":
+        print(
+            f"Loaded scenario: {scenario['scenario_id']} "
+            f"with {len(scenario['catalog'])} catalog items"
         )
-        print(f"Completed negotiation: {engine.state.outcome.status} (run_id: {engine.run_id})")
         return 0
-    except (OSError, ValueError, RuntimeError) as exc:
-        print(f"ERROR: {exc}")
-        return 1
+    use_mock = args.agent == "mock" or not os.getenv("LLM_API_KEY")
+    if use_mock:
+        adapters = default_mock_adapters()
+    else:
+        adapter = OpenAIAdapter()
+        adapters = {"seller": adapter, "buyer": adapter}
+    engine = run_llm_negotiation(
+        scenario,
+        adapters,
+        db_path=args.db_path or "results/runs.db",
+        mock_demo=use_mock,
+        seller_prompt_path=args.seller_prompt,
+        buyer_prompt_path=args.buyer_prompt,
+    )
+    print(f"Completed negotiation: {engine.state.outcome.status} (run_id: {engine.run_id})")
+    return 0
 
 
 def _events_from_run(run: dict) -> tuple[Event, ...]:
@@ -145,7 +168,6 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, KeyError, ValueError, RuntimeError) as exc:
         print(f"ERROR: {exc}")
         return 1
-    return 1
 
 
 if __name__ == "__main__":

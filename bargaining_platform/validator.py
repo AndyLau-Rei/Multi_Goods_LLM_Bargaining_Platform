@@ -29,11 +29,7 @@ _CONDITION_KEYS = {
 
 
 def parse_action(raw_text: str, role: str) -> Action | ValidationResult:
-    """Parse one raw model response without performing negotiation validation.
-
-    The caller retains ``raw_text`` for event logging alongside any returned
-    ``ValidationResult``; this function never raises JSON or schema exceptions.
-    """
+    """Parse raw model output into an action or a structured error."""
     if role not in {"seller", "buyer"}:
         return ValidationResult(False, "SCHEMA_VIOLATION", "Unknown acting role")
     if not isinstance(raw_text, str):
@@ -44,7 +40,7 @@ def parse_action(raw_text: str, role: str) -> Action | ValidationResult:
         text = fenced.group(1).strip()
     try:
         data = json.loads(text)
-    except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+    except json.JSONDecodeError:
         return ValidationResult(False, "MALFORMED_JSON", "Model output is not valid JSON")
     if not isinstance(data, dict):
         return ValidationResult(False, "SCHEMA_VIOLATION", "Action must be a JSON object")
@@ -68,7 +64,9 @@ def _validate_action_shape(data: dict) -> ValidationResult | None:
     if set(data) - _ACTION_KEYS:
         return ValidationResult(False, "SCHEMA_VIOLATION", "Action contains unexpected fields")
     if not isinstance(data.get("action_type"), str) or data["action_type"] not in ACTION_TYPES:
-        return ValidationResult(False, "SCHEMA_VIOLATION", "Action type is required and unsupported")
+        return ValidationResult(
+            False, "SCHEMA_VIOLATION", "Action type is required and unsupported"
+        )
     action_type = data["action_type"]
     proposal_id = data.get("proposal_id")
     if action_type in {"PROPOSE", "COUNTER", "ACCEPT"}:
@@ -90,7 +88,9 @@ def _validate_action_shape(data: dict) -> ValidationResult | None:
 
 def _validate_proposal_shape(proposal: dict) -> ValidationResult | None:
     if set(proposal) != _PROPOSAL_KEYS:
-        return ValidationResult(False, "SCHEMA_VIOLATION", "Proposal fields are incomplete or unexpected")
+        return ValidationResult(
+            False, "SCHEMA_VIOLATION", "Proposal fields are incomplete or unexpected"
+        )
     if not isinstance(proposal["proposal_id"], str) or not proposal["proposal_id"]:
         return ValidationResult(False, "SCHEMA_VIOLATION", "Proposal ID must be a non-empty string")
     if not isinstance(proposal["acceptance_mode"], str):
@@ -98,12 +98,16 @@ def _validate_proposal_shape(proposal: dict) -> ValidationResult | None:
     if not isinstance(proposal["decision_summary"], str):
         return ValidationResult(False, "SCHEMA_VIOLATION", "Decision summary must be text")
     if not isinstance(proposal["terms"], list) or not proposal["terms"]:
-        return ValidationResult(False, "SCHEMA_VIOLATION", "Proposal terms must be a non-empty list")
+        return ValidationResult(
+            False, "SCHEMA_VIOLATION", "Proposal terms must be a non-empty list"
+        )
     if not isinstance(proposal["conditions"], list):
         return ValidationResult(False, "SCHEMA_VIOLATION", "Proposal conditions must be a list")
     for term in proposal["terms"]:
         if not isinstance(term, dict) or set(term) != _TERM_KEYS:
-            return ValidationResult(False, "SCHEMA_VIOLATION", "Term fields are incomplete or unexpected")
+            return ValidationResult(
+                False, "SCHEMA_VIOLATION", "Term fields are incomplete or unexpected"
+            )
         if not isinstance(term["type"], str) or not isinstance(term["item_id"], str):
             return ValidationResult(False, "SCHEMA_VIOLATION", "Term identifiers must be text")
         if not _json_number(term["quantity"]) or not _json_number(term["unit_price"]):
@@ -112,13 +116,24 @@ def _validate_proposal_shape(proposal: dict) -> ValidationResult | None:
             return ValidationResult(False, "SCHEMA_VIOLATION", "Term unit must be text")
     for condition in proposal["conditions"]:
         if not isinstance(condition, dict) or set(condition) != _CONDITION_KEYS:
-            return ValidationResult(False, "SCHEMA_VIOLATION", "Condition fields are incomplete or unexpected")
+            return ValidationResult(
+                False, "SCHEMA_VIOLATION",
+                "Condition fields are incomplete or unexpected",
+            )
         if not isinstance(condition["type"], str):
             return ValidationResult(False, "SCHEMA_VIOLATION", "Condition type must be text")
-        if not isinstance(condition["discounted_item_id"], str) or not isinstance(condition["required_item_id"], str):
+        if (
+            not isinstance(condition["discounted_item_id"], str)
+            or not isinstance(condition["required_item_id"], str)
+        ):
             return ValidationResult(False, "SCHEMA_VIOLATION", "Condition item IDs must be text")
-        if not _json_number(condition["discount_per_unit"]) or not _json_number(condition["minimum_required_quantity"]):
-            return ValidationResult(False, "SCHEMA_VIOLATION", "Condition numeric fields are invalid")
+        if (
+            not _json_number(condition["discount_per_unit"])
+            or not _json_number(condition["minimum_required_quantity"])
+        ):
+            return ValidationResult(
+                False, "SCHEMA_VIOLATION", "Condition numeric fields are invalid"
+            )
     for prices in (proposal["original_prices"], proposal["effective_prices"]):
         if not isinstance(prices, dict) or any(
             not isinstance(item_id, str) or not _json_number(price)
@@ -141,10 +156,15 @@ def validate_action(role: str, action: Action, state: GameState) -> ValidationRe
         return ValidationResult(False, "WRONG_ACTOR", "Action actor does not match the acting role")
     if role != state.current_actor:
         return ValidationResult(False, "WRONG_TURN", "It is not this actor's turn")
-    if not isinstance(action.action_type, str) or action.action_type not in {"PROPOSE", "COUNTER", "ACCEPT", "WALK_AWAY"}:
+    if (
+        not isinstance(action.action_type, str)
+        or action.action_type not in {"PROPOSE", "COUNTER", "ACCEPT", "WALK_AWAY"}
+    ):
         return ValidationResult(False, "INVALID_ACTION_TYPE", "Unsupported action type")
     if action.action_type not in state.private_profiles[role]["allowed_actions"]:
-        return ValidationResult(False, "ACTION_NOT_ALLOWED", "Action is not permitted for this role")
+        return ValidationResult(
+            False, "ACTION_NOT_ALLOWED", "Action is not permitted for this role"
+        )
 
     active = state.active_proposal
     if active is None and action.action_type != "PROPOSE":
@@ -155,24 +175,60 @@ def validate_action(role: str, action: Action, state: GameState) -> ValidationRe
         return ValidationResult(False, "STALE_PROPOSAL_ID", "Proposal ID is not current")
     if action.action_type == "WALK_AWAY":
         if action.proposal is not None:
-            return ValidationResult(False, "INVALID_ACTION_SCHEMA", "WALK_AWAY cannot contain a proposal")
+            return ValidationResult(
+                False, "INVALID_ACTION_SCHEMA", "WALK_AWAY cannot contain a proposal"
+            )
         return ValidationResult(ok=True)
     if action.action_type == "ACCEPT":
         if action.proposal is not None:
-            return ValidationResult(False, "MUTATION_ON_ACCEPT", "ACCEPT must reference only the current proposal ID")
+            return ValidationResult(
+                False, "MUTATION_ON_ACCEPT",
+                "ACCEPT must reference only the current proposal ID",
+            )
         return _validate_hard_constraints(active, state)
 
     proposal = action.proposal
-    if not isinstance(proposal, Proposal) or not isinstance(proposal.proposal_id, str) or not proposal.proposal_id:
+    if (
+        not isinstance(proposal, Proposal)
+        or not isinstance(proposal.proposal_id, str)
+        or not proposal.proposal_id
+    ):
         return ValidationResult(False, "INVALID_ACTION_SCHEMA", "A proposal with an ID is required")
     if action.action_type == "PROPOSE" and action.proposal_id != proposal.proposal_id:
         return ValidationResult(False, "INVALID_PROPOSAL_ID", "Action and proposal IDs must match")
-    if proposal.acceptance_mode != "all_or_nothing" or not isinstance(proposal.terms, list) or not proposal.terms:
-        return ValidationResult(False, "INVALID_PROPOSAL", "A complete all-or-nothing proposal is required")
+    if (
+        proposal.acceptance_mode != "all_or_nothing"
+        or not isinstance(proposal.terms, list)
+        or not proposal.terms
+    ):
+        return ValidationResult(
+            False, "INVALID_PROPOSAL",
+            "A complete all-or-nothing proposal is required",
+        )
     if not isinstance(proposal.conditions, list):
         return ValidationResult(False, "INVALID_CONDITION", "Conditions must be a list")
 
+    quantities = _validate_purchase_terms(proposal, state)
+    if isinstance(quantities, ValidationResult):
+        return quantities
+
+    try:
+        totals = calculate_effective_totals(proposal, state)
+    except _ConditionError as exc:
+        if exc.code == "DISCOUNT_BELOW_FLOOR" and not proposal.conditions:
+            return ValidationResult(False, "PRICE_BELOW_FLOOR", "The proposed price is invalid")
+        return ValidationResult(False, exc.code, exc.message)
+    if isinstance(totals, ValidationResult):
+        return totals
+
+    return _validate_hard_constraints(proposal, state, totals=totals, quantities=quantities)
+
+
+def _validate_purchase_terms(
+    proposal: Proposal, state: GameState
+) -> dict[str, int] | ValidationResult:
     catalog = {entry["id"]: entry for entry in state.catalog}
+    quantities: dict[str, int] = {}
     for term in proposal.terms:
         if not isinstance(term, Term):
             return ValidationResult(False, "INVALID_TERM", "Term has an invalid schema")
@@ -184,55 +240,51 @@ def validate_action(role: str, action: Action, state: GameState) -> ValidationRe
         if term.unit != item["unit"]:
             return ValidationResult(False, "INVALID_UNIT", "Unit does not match the catalog")
         if type(term.quantity) is not int or term.quantity <= 0:
-            return ValidationResult(False, "INVALID_QUANTITY", "Quantity must be a positive integer")
+            return ValidationResult(
+                False, "INVALID_QUANTITY", "Quantity must be a positive integer"
+            )
         if not _nonnegative_number(term.unit_price):
-            return ValidationResult(False, "INVALID_PRICE", "Unit price must be non-negative and finite")
-
-    try:
-        totals = calculate_effective_totals(proposal, state)
-    except _ConditionError as exc:
-        if exc.code == "DISCOUNT_BELOW_FLOOR" and not proposal.conditions:
-            return ValidationResult(False, "PRICE_BELOW_FLOOR", "The proposed price is invalid")
-        return ValidationResult(False, exc.code, exc.message)
-    if isinstance(totals, ValidationResult):
-        return totals
-
-    return _validate_hard_constraints(proposal, state)
-
-
-def _validate_hard_constraints(proposal: Proposal, state: GameState) -> ValidationResult:
-    catalog = {entry["id"]: entry for entry in state.catalog}
-
-    quantities: dict[str, int] = {}
-    for term in proposal.terms:
-        if not isinstance(term, Term):
-            return ValidationResult(False, "INVALID_TERM", "Term has an invalid schema")
-        if not isinstance(term.item_id, str) or term.item_id not in catalog:
-            return ValidationResult(False, "INVALID_ITEM_ID", "Item is not in the catalog")
-        if term.unit != catalog[term.item_id]["unit"]:
-            return ValidationResult(False, "INVALID_UNIT", "Unit does not match the catalog")
-        if type(term.quantity) is not int or term.quantity <= 0:
-            return ValidationResult(False, "INVALID_QUANTITY", "Quantity must be a positive integer")
-        if not _nonnegative_number(term.unit_price):
-            return ValidationResult(False, "INVALID_PRICE", "Unit price must be non-negative and finite")
+            return ValidationResult(
+                False, "INVALID_PRICE", "Unit price must be non-negative and finite"
+            )
         quantities[term.item_id] = quantities.get(term.item_id, 0) + term.quantity
+    return quantities
+
+
+def _validate_hard_constraints(
+    proposal: Proposal,
+    state: GameState,
+    totals: dict | None = None,
+    quantities: dict[str, int] | None = None,
+) -> ValidationResult:
+    catalog = {entry["id"]: entry for entry in state.catalog}
+    if quantities is None:
+        quantities = _validate_purchase_terms(proposal, state)
+        if isinstance(quantities, ValidationResult):
+            return quantities
     for item_id, quantity in quantities.items():
         if quantity > catalog[item_id]["seller_stock"]:
-            return ValidationResult(False, "INSUFFICIENT_STOCK", "The requested quantity is unavailable")
+            return ValidationResult(
+                False, "INSUFFICIENT_STOCK", "The requested quantity is unavailable"
+            )
 
-    if not isinstance(proposal.original_prices, dict) or proposal.original_prices.keys() != quantities.keys():
+    if (
+        not isinstance(proposal.original_prices, dict)
+        or proposal.original_prices.keys() != quantities.keys()
+    ):
         return ValidationResult(False, "INVALID_PRICE", "The proposed price is invalid")
     for term in proposal.terms:
         if proposal.original_prices.get(term.item_id) != term.unit_price:
             return ValidationResult(False, "INVALID_PRICE", "The proposed price is invalid")
-    try:
-        totals = calculate_effective_totals(proposal, state)
-    except _ConditionError as exc:
-        if exc.code == "DISCOUNT_BELOW_FLOOR" and not proposal.conditions:
-            return ValidationResult(False, "PRICE_BELOW_FLOOR", "The proposed price is invalid")
-        return ValidationResult(False, exc.code, exc.message)
-    if isinstance(totals, ValidationResult):
-        return totals
+    if totals is None:
+        try:
+            totals = calculate_effective_totals(proposal, state)
+        except _ConditionError as exc:
+            if exc.code == "DISCOUNT_BELOW_FLOOR" and not proposal.conditions:
+                return ValidationResult(False, "PRICE_BELOW_FLOOR", "The proposed price is invalid")
+            return ValidationResult(False, exc.code, exc.message)
+        if isinstance(totals, ValidationResult):
+            return totals
     if not proposal.conditions and (
         not isinstance(proposal.effective_prices, dict)
         or proposal.effective_prices != totals["effective_prices"]
@@ -244,9 +296,13 @@ def _validate_hard_constraints(proposal: Proposal, state: GameState) -> Validati
     try:
         calculate_original_totals(proposal, state.legal_ranges["max_quantity"])
     except ValueError:
-        return ValidationResult(False, "QUANTITY_LIMIT_EXCEEDED", "The requested quantity is not permitted")
+        return ValidationResult(
+            False, "QUANTITY_LIMIT_EXCEEDED", "The requested quantity is not permitted"
+        )
     if totals["effective_total"] > Decimal(str(state.private_profiles["buyer"]["budget"])):
-        return ValidationResult(False, "BUDGET_EXCEEDED", "The proposed total exceeds the allowed budget")
+        return ValidationResult(
+            False, "BUDGET_EXCEEDED", "The proposed total exceeds the allowed budget"
+        )
     return ValidationResult(ok=True)
 
 
@@ -258,7 +314,11 @@ class _ConditionError(ValueError):
 
 def calculate_effective_totals(proposal: Proposal, state: GameState) -> dict | ValidationResult:
     """Evaluate typed bundle conditions and return original and effective totals."""
-    if not isinstance(proposal, Proposal) or not isinstance(proposal.terms, list) or not proposal.terms:
+    if (
+        not isinstance(proposal, Proposal)
+        or not isinstance(proposal.terms, list)
+        or not proposal.terms
+    ):
         return ValidationResult(False, "MALFORMED_TERM", "Proposal terms are malformed")
     catalog = {entry["id"]: entry for entry in state.catalog}
     for term in proposal.terms:
@@ -297,8 +357,13 @@ def calculate_effective_totals(proposal: Proposal, state: GameState) -> dict | V
             or condition.required_item_id not in catalog_ids
         ):
             raise _ConditionError("INVALID_ITEM_ID", "Condition item is not in the catalog")
-        if type(condition.minimum_required_quantity) is not int or condition.minimum_required_quantity <= 0:
-            raise _ConditionError("INVALID_QUANTITY", "Required quantity must be a positive integer")
+        if (
+            type(condition.minimum_required_quantity) is not int
+            or condition.minimum_required_quantity <= 0
+        ):
+            raise _ConditionError(
+                "INVALID_QUANTITY", "Required quantity must be a positive integer"
+            )
         if not _nonnegative_number(condition.discount_per_unit):
             raise _ConditionError("INVALID_CONDITION", "Discount must be non-negative and finite")
         if (
@@ -310,7 +375,10 @@ def calculate_effective_totals(proposal: Proposal, state: GameState) -> dict | V
                 "The condition must reference items in the proposal",
             )
         if quantities.get(condition.required_item_id, 0) < condition.minimum_required_quantity:
-            raise _ConditionError("CONDITION_NOT_SATISFIED", "The conditional offer requirements are not met")
+            raise _ConditionError(
+                "CONDITION_NOT_SATISFIED",
+                "The conditional offer requirements are not met",
+            )
         if max_discount is None or condition.discount_per_unit > max_discount:
             raise _ConditionError("DISCOUNT_EXCEEDS_CAP", "The proposed discount is not permitted")
         discounts[condition.discounted_item_id] = _add_money(
@@ -328,8 +396,13 @@ def calculate_effective_totals(proposal: Proposal, state: GameState) -> dict | V
         if effective_price < floors[item_id]:
             raise _ConditionError("DISCOUNT_BELOW_FLOOR", "The proposed discount is not permitted")
 
-    original_line_totals = [_multiply_money(term.quantity, term.unit_price) for term in proposal.terms]
-    effective_line_totals = [_multiply_money(term.quantity, effective_prices[term.item_id]) for term in proposal.terms]
+    original_line_totals = [
+        _multiply_money(term.quantity, term.unit_price) for term in proposal.terms
+    ]
+    effective_line_totals = [
+        _multiply_money(term.quantity, effective_prices[term.item_id])
+        for term in proposal.terms
+    ]
     return {
         "original_prices": original_prices,
         "effective_prices": effective_prices,
@@ -359,13 +432,23 @@ def calculate_original_totals(proposal: Proposal, max_quantity: dict[str, int]) 
         if quantities[term.item_id] > max_quantity[term.item_id]:
             raise ValueError("Quantity limit exceeded")
         prices.append(Decimal(str(term.unit_price)))
-    whole_digits = max((price.adjusted() + 1 + len(str(term.quantity))
-                        for term, price in zip(proposal.terms, prices)), default=1)
+    whole_digits = max(
+        (
+            price.adjusted() + 1 + len(str(term.quantity))
+            for term, price in zip(proposal.terms, prices)
+        ),
+        default=1,
+    )
     fractional_digits = max((-price.as_tuple().exponent for price in prices), default=0)
     with localcontext() as context:
-        context.prec = max(context.prec, whole_digits + fractional_digits + len(str(len(prices))) + 1)
-        line_totals = [term.quantity * (term.unit_price if type(term.unit_price) is int else price)
-                       for term, price in zip(proposal.terms, prices)]
+        context.prec = max(
+            context.prec,
+            whole_digits + fractional_digits + len(str(len(prices))) + 1,
+        )
+        line_totals = [
+            term.quantity * (term.unit_price if type(term.unit_price) is int else price)
+            for term, price in zip(proposal.terms, prices)
+        ]
         total = sum(line_totals, 0)
     return {"line_totals": line_totals, "original_total": total}
 

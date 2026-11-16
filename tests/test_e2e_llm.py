@@ -31,11 +31,18 @@ def _proposal():
 def test_e2e_mock_llm_run(tmp_path):
     proposal = _proposal()
     adapters = {
-        "seller": MockLLMAdapter([json.dumps({"action_type": "PROPOSE", "proposal_id": "e2e-1", "proposal": proposal})]),
+        "seller": MockLLMAdapter([
+            json.dumps({
+                "action_type": "PROPOSE", "proposal_id": "e2e-1",
+                "proposal": proposal,
+            })
+        ]),
         "buyer": MockLLMAdapter([json.dumps({"action_type": "ACCEPT", "proposal_id": "e2e-1"})]),
     }
 
-    engine = run_llm_negotiation(_scenario(), adapters, run_id="e2e-1", db_path=tmp_path / "runs.db")
+    engine = run_llm_negotiation(
+        _scenario(), adapters, run_id="e2e-1", db_path=tmp_path / "runs.db"
+    )
 
     assert engine.state.outcome.status == "AGREEMENT"
     saved = load_run_from_sqlite("e2e-1", tmp_path / "runs.db")
@@ -53,7 +60,9 @@ def test_e2e_llm_retry_on_bad_json(tmp_path):
         "buyer": MockLLMAdapter([json.dumps({"action_type": "ACCEPT", "proposal_id": "e2e-2"})]),
     }
 
-    engine = run_llm_negotiation(_scenario(), adapters, run_id="e2e-2", db_path=tmp_path / "runs.db")
+    engine = run_llm_negotiation(
+        _scenario(), adapters, run_id="e2e-2", db_path=tmp_path / "runs.db"
+    )
 
     assert engine.state.outcome.status == "AGREEMENT"
     assert engine.state.invalid_attempts == 0
@@ -71,9 +80,14 @@ def test_llm_metadata_logging(tmp_path):
         "buyer": MockLLMAdapter([json.dumps({"action_type": "ACCEPT", "proposal_id": "e2e-3"})]),
     }
 
-    engine = run_llm_negotiation(_scenario(), adapters, run_id="e2e-3", db_path=tmp_path / "runs.db")
+    engine = run_llm_negotiation(
+        _scenario(), adapters, run_id="e2e-3", db_path=tmp_path / "runs.db"
+    )
 
-    action_events = [event for event in engine.event_logger.events if event.event_type == "ACTION_ATTEMPT"]
+    action_events = [
+        event for event in engine.event_logger.events
+        if event.event_type == "ACTION_ATTEMPT"
+    ]
     assert len(action_events) == 3
     for event in action_events:
         assert isinstance(event.raw_output, str) and event.raw_output

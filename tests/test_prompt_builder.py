@@ -1,3 +1,5 @@
+import pytest
+
 from bargaining_platform.engine import NegotiationEngine
 from bargaining_platform.prompt_builder import make_private_view, render_prompt
 from bargaining_platform.scenario import load_scenario
@@ -11,32 +13,40 @@ def _views():
     )
 
 
-def test_seller_prompt_generation():
-    seller_view, _ = _views()
+@pytest.mark.parametrize(
+    ("role", "persona", "objective", "visible_field", "visible_value", "hidden_values"),
+    [
+        (
+            "seller",
+            "You are an agent who wants to sell products to a buyer.",
+            "maximize seller utility",
+            "unit_cost",
+            "70",
+            ("130", "unit_value"),
+        ),
+        (
+            "buyer",
+            "You are an agent who is interested in buying products from a seller.",
+            "maximize buyer utility",
+            "unit_value",
+            "130",
+            ("70", "unit_cost"),
+        ),
+    ],
+)
+def test_role_prompt_generation(
+    role, persona, objective, visible_field, visible_value, hidden_values
+):
+    seller_view, buyer_view = _views()
+    prompt = render_prompt(role, seller_view if role == "seller" else buyer_view)
 
-    prompt = render_prompt("seller", seller_view)
-
-    assert "You are an agent who wants to sell products to a buyer." in prompt
-    assert "seller" in prompt
-    assert "maximize seller utility" in prompt
-    assert "unit_cost" in prompt
-    assert "70" in prompt
-    assert "130" not in prompt
-    assert "unit_value" not in prompt
-
-
-def test_buyer_prompt_generation():
-    _, buyer_view = _views()
-
-    prompt = render_prompt("buyer", buyer_view)
-
-    assert "You are an agent who is interested in buying products from a seller." in prompt
-    assert "buyer" in prompt
-    assert "maximize buyer utility" in prompt
-    assert "unit_value" in prompt
-    assert "130" in prompt
-    assert "70" not in prompt
-    assert "unit_cost" not in prompt
+    assert persona in prompt
+    assert role in prompt
+    assert objective in prompt
+    assert visible_field in prompt
+    assert visible_value in prompt
+    for hidden in hidden_values:
+        assert hidden not in prompt
 
 
 def test_prompt_includes_json_instructions():

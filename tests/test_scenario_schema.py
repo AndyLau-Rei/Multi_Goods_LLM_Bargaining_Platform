@@ -33,7 +33,10 @@ def test_missing_allowed_actions_is_rejected():
     del data["private_profiles"]["seller"]["allowed_actions"]
 
     with patch.object(Path, "read_text", return_value=json.dumps(data)):
-        with pytest.raises(ValueError, match="Missing required key: private_profiles.seller.allowed_actions"):
+        with pytest.raises(
+            ValueError,
+            match="Missing required key: private_profiles.seller.allowed_actions",
+        ):
             load_scenario("missing_allowed_actions.json")
 
 

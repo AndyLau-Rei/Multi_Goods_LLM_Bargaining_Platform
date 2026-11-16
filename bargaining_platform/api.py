@@ -5,20 +5,23 @@ from __future__ import annotations
 import os
 from copy import deepcopy
 from decimal import Decimal
+from hmac import compare_digest
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .metrics import calculate_metrics
 from .model_adapter import OpenAIAdapter
+from .models import json_safe
 from .prompt_builder import make_private_view
 from .runner import default_mock_adapters, run_llm_negotiation
 from .scenario import load_scenario
 from .storage import DEFAULT_DB_PATH, load_run_from_sqlite, replay_run
+from .validator import _multiply_money, _sum_money
 
 
 app = FastAPI(title="Bargaining Platform API", version="0.1.0")
@@ -115,36 +118,47 @@ def _public_action(action: dict) -> dict:
     if not isinstance(proposal, dict):
         return public
     effective = proposal.get("effective_prices") or {}
-    effective_total = Decimal(0)
+    line_totals = []
     for term in proposal.get("terms", []):
         item_id = term.get("item_id")
-        if item_id in effective:
-            effective_unit_price = effective[item_id]
-            line_total = Decimal(str(effective_unit_price)) * term["quantity"]
-            term["effective_unit_price"] = effective_unit_price
-            term["effective_total_price"] = _serialize_money(line_total, effective_unit_price)
-            effective_total += line_total
-    proposal["effective_total_price"] = _serialize_money(effective_total, *effective.values())
+        if item_id not in effective:
+            continue
+        effective_unit_price = effective[item_id]
+        price = (
+            Decimal(effective_unit_price)
+            if isinstance(effective_unit_price, str)
+            else effective_unit_price
+        )
+        line_total = _multiply_money(term["quantity"], price)
+        term["effective_unit_price"] = effective_unit_price
+        term["effective_total_price"] = json_safe(line_total)
+        line_totals.append(line_total)
+    proposal["effective_total_price"] = json_safe(_sum_money(line_totals))
     return public
-
-
-def _serialize_money(value: Decimal, *source_values: object) -> int | str:
-    """Keep integral integer amounts numeric and preserve fractional precision as text."""
-    if all(type(source) is int for source in source_values) and value == value.to_integral_value():
-        return int(value)
-    return format(value, "f")
 
 
 @app.get("/runs/{run_id}/view")
 def run_view(
     run_id: str,
-    role: Literal["buyer", "seller"] = Query(..., description="Role-scoped view to return."),
-    agent_role: str | None = Header(default=None, alias="X-Agent-Role"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> dict[str, Any]:
-    """Reconstruct authoritative state and expose only the requested role's private view."""
-    # TODO: Replace this local role header with authenticated session binding before remote use.
-    if agent_role != role:
+    """Reconstruct state for the role selected by its Bearer credential."""
+    buyer_secret = os.getenv("BUYER_API_SECRET")
+    seller_secret = os.getenv("SELLER_API_SECRET")
+    scheme, _, token = (authorization or "").partition(" ")
+    if (
+        scheme.lower() != "bearer"
+        or not token
+        or not buyer_secret
+        or not seller_secret
+        or compare_digest(buyer_secret, seller_secret)
+    ):
         raise HTTPException(status_code=403, detail="Role view not authorized")
+    buyer_match = compare_digest(token, buyer_secret)
+    seller_match = compare_digest(token, seller_secret)
+    if not buyer_match and not seller_match:
+        raise HTTPException(status_code=403, detail="Role view not authorized")
+    role: Literal["buyer", "seller"] = "buyer" if buyer_match else "seller"
     try:
         state = replay_run(run_id, _db_path())
         return make_private_view(role, state)

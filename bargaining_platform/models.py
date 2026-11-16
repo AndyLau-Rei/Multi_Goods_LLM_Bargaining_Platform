@@ -106,7 +106,9 @@ def validate_scenario(data: object) -> dict:
             raise ValueError(f"legal_ranges.max_quantity.{item_id} must be a positive integer")
 
     bundle_rules = _fields(
-        scenario["bundle_rules"], {"max_discount_per_unit", "allowed_condition_types"}, "bundle_rules"
+        scenario["bundle_rules"],
+        {"max_discount_per_unit", "allowed_condition_types"},
+        "bundle_rules",
     )
     _number(bundle_rules["max_discount_per_unit"], "bundle_rules.max_discount_per_unit")
     if bundle_rules["max_discount_per_unit"] < 0:
@@ -201,7 +203,10 @@ class Action(_Serializable):
     @classmethod
     def from_dict(cls, data: dict) -> "Action":
         proposal = data.get("proposal")
-        return cls(**{**data, "proposal": Proposal.from_dict(proposal) if proposal is not None else None})
+        return cls(**{
+            **data,
+            "proposal": Proposal.from_dict(proposal) if proposal is not None else None,
+        })
 
 
 @dataclass

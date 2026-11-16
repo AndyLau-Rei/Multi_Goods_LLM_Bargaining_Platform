@@ -1,8 +1,10 @@
 import copy
+import pytest
 
 from bargaining_platform.engine import NegotiationEngine
 from bargaining_platform.models import Action, Condition, Proposal, Term
 from bargaining_platform.scenario import load_scenario
+from bargaining_platform import validator
 
 
 def _proposal(proposal_id: str) -> Proposal:
@@ -46,18 +48,51 @@ def test_stale_proposal_id():
     assert engine.state.current_actor == "seller"
 
 
-def test_missing_item_id_or_invalid_quantity():
+def test_missing_item_id_is_rejected():
     engine = _engine()
     missing_item = _proposal("offer-1")
     missing_item.terms[0].item_id = "missing"
     result = engine.step(Action("PROPOSE", missing_item.proposal_id, missing_item))
     assert result.error_code == "INVALID_ITEM_ID"
 
+@pytest.mark.parametrize("quantity", [0, -1])
+def test_invalid_quantity_is_rejected(quantity):
     engine = _engine()
     invalid_quantity = _proposal("offer-1")
-    invalid_quantity.terms[0] = Term("purchase", "A", 0, 120, unit="piece")
+    invalid_quantity.terms[0] = Term("purchase", "A", quantity, 120, unit="piece")
     result = engine.step(Action("PROPOSE", invalid_quantity.proposal_id, invalid_quantity))
     assert result.error_code == "INVALID_QUANTITY"
+    assert engine.state.active_proposal is None
+
+
+def test_term_validation_preserves_error_precedence():
+    engine = _engine()
+    offer = _proposal("offer-1")
+    offer.terms[0] = Term("service", "missing", 0, -1, unit="wrong")
+
+    result = engine.step(Action("PROPOSE", offer.proposal_id, offer))
+
+    assert result.error_code == "INVALID_TERM_TYPE"
+
+
+def test_proposal_validation_calculates_effective_totals_once(monkeypatch):
+    engine = _engine()
+    offer = _proposal("offer-1")
+    calculate = validator.calculate_effective_totals
+    calls = 0
+
+    def counted(proposal, state):
+        nonlocal calls
+        calls += 1
+        return calculate(proposal, state)
+
+    monkeypatch.setattr(validator, "calculate_effective_totals", counted)
+    result = validator.validate_action(
+        "seller", Action("PROPOSE", offer.proposal_id, offer), engine.state
+    )
+
+    assert result.ok
+    assert calls == 1
 
 
 def test_malformed_nested_term_returns_validation_error():

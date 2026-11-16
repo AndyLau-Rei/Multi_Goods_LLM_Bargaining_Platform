@@ -107,7 +107,10 @@ def _action_schema() -> dict:
         "additionalProperties": False,
         "required": ["action_type", "proposal_id"],
         "properties": {
-            "action_type": {"type": "string", "enum": ["PROPOSE", "COUNTER", "ACCEPT", "WALK_AWAY"]},
+            "action_type": {
+                "type": "string",
+                "enum": ["PROPOSE", "COUNTER", "ACCEPT", "WALK_AWAY"],
+            },
             "proposal_id": {"type": ["string", "null"]},
             "proposal": {
                 "type": ["object", "null"],

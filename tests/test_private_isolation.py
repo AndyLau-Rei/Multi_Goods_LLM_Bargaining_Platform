@@ -27,26 +27,20 @@ def _state():
     return engine.state
 
 
-def test_buyer_view_excludes_seller_profile():
-    view = make_private_view("buyer", _state())
+@pytest.mark.parametrize(
+    ("role", "visible_key", "visible_value", "hidden_fields"),
+    [
+        ("buyer", "budget", 200, ("unit_cost", "minimum_unit_price", "70", "80")),
+        ("seller", "unit_cost", {"A": 70, "B": 35}, ("budget", "unit_value", "200", "130")),
+    ],
+)
+def test_role_view_excludes_opponent_profile(role, visible_key, visible_value, hidden_fields):
+    view = make_private_view(role, _state())
     serialized = json.dumps(view, sort_keys=True)
 
-    assert view["private_profile"]["budget"] == 200
-    assert "unit_cost" not in serialized
-    assert "minimum_unit_price" not in serialized
-    assert "70" not in serialized
-    assert "80" not in serialized
-
-
-def test_seller_view_excludes_buyer_profile():
-    view = make_private_view("seller", _state())
-    serialized = json.dumps(view, sort_keys=True)
-
-    assert view["private_profile"]["unit_cost"]["A"] == 70
-    assert "budget" not in serialized
-    assert "unit_value" not in serialized
-    assert "200" not in serialized
-    assert "130" not in serialized
+    assert view["private_profile"][visible_key] == visible_value
+    for hidden in hidden_fields:
+        assert hidden not in serialized
 
 
 def test_views_contain_detached_public_state_without_private_summary():

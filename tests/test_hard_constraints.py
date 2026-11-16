@@ -1,3 +1,5 @@
+import pytest
+
 from bargaining_platform.engine import NegotiationEngine
 from bargaining_platform.models import Action, Proposal, Term
 from bargaining_platform.scenario import load_scenario
@@ -19,24 +21,16 @@ def _engine() -> NegotiationEngine:
     return NegotiationEngine(load_scenario("scenarios/shop_bundle.json"))
 
 
-def test_rejects_quantity_above_stock():
+@pytest.mark.parametrize("quantities", [(21,), (11, 10)])
+def test_rejects_quantity_above_stock(quantities):
     engine = _engine()
     offer = _proposal("offer-1")
-    offer.terms[0].quantity = 21
+    offer.terms = [Term("purchase", "A", quantity, 120, unit="piece") for quantity in quantities]
 
     result = engine.step(Action("PROPOSE", offer.proposal_id, offer))
 
     assert result.error_code == "INSUFFICIENT_STOCK"
     assert engine.state.active_proposal is None
-
-    engine = _engine()
-    offer = _proposal("offer-2")
-    offer.terms = [
-        Term("purchase", "A", 11, 120, unit="piece"),
-        Term("purchase", "A", 10, 120, unit="piece"),
-    ]
-    result = engine.step(Action("PROPOSE", offer.proposal_id, offer))
-    assert result.error_code == "INSUFFICIENT_STOCK"
 
 
 def test_rejects_price_below_floor_without_leaking_floor():

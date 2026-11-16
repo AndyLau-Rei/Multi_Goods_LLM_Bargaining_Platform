@@ -15,7 +15,10 @@ def test_replay_command_routes_to_storage(tmp_path, capsys):
 
 def test_export_command_routes_loaded_events(tmp_path, capsys):
     output = tmp_path / "events.jsonl"
-    with patch("bargaining_platform.cli.load_run_from_sqlite", return_value={"events": []}) as load_run:
+    with patch(
+        "bargaining_platform.cli.load_run_from_sqlite",
+        return_value={"events": []},
+    ) as load_run:
         with patch("bargaining_platform.cli.export_run_to_jsonl") as export:
             assert main([
                 "export",

@@ -128,3 +128,27 @@ def test_jsonl_export_preserves_details(tmp_path):
     )
     assert record["parsed_action"]["proposal"]["effective_prices"]["A"] == "99.5"
     assert record["validation_result"]["error_code"] == "CONDITION_NOT_SATISFIED"
+
+
+def test_decimal_prices_are_json_serializable_in_public_transcript():
+    engine = _engine()
+    proposal = Proposal(
+        "decimal-1",
+        "all_or_nothing",
+        [
+            Term("purchase", "A", 1, 100.0, unit="piece"),
+            Term("purchase", "B", 1, 60.0, unit="piece"),
+        ],
+        [Condition("discount_if_item_in_bundle", "A", 0.5, "B", 1)],
+        "",
+        {"A": 100.0, "B": 60.0},
+        {"A": 100.0, "B": 60.0},
+    )
+
+    state = engine.step(Action("PROPOSE", proposal.proposal_id, proposal))
+    serialized = json.dumps(state.public_transcript)
+
+    assert "99.5" in serialized
+    assert json.loads(serialized)[0]["proposal"]["effective_prices"]["A"] == "99.5"
+    assert json.loads(serialized)[0]["proposal"]["original_prices"]["A"] == 100.0
+    assert state.active_proposal.effective_prices["A"] == Decimal("99.5")

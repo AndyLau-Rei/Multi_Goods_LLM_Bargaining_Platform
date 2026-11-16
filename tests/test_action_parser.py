@@ -1,4 +1,5 @@
 import json
+import pytest
 
 from bargaining_platform.models import Action, ValidationResult
 from bargaining_platform.engine import NegotiationEngine
@@ -26,25 +27,33 @@ def _proposal_payload():
     }
 
 
-def test_parse_valid_json():
-    result = parse_action(json.dumps({
-        "action_type": "PROPOSE", "proposal_id": "offer-1", "proposal": _proposal_payload()
-    }), "seller")
+@pytest.mark.parametrize(
+    ("raw_text", "role", "action_type"),
+    [
+        (
+            json.dumps({
+                "action_type": "PROPOSE",
+                "proposal_id": "offer-1",
+                "proposal": _proposal_payload(),
+            }),
+            "seller",
+            "PROPOSE",
+        ),
+        (
+            "```json\n{\"action_type\":\"ACCEPT\",\"proposal_id\":\"offer-1\"}\n```",
+            "buyer",
+            "ACCEPT",
+        ),
+    ],
+)
+def test_parse_valid_json(raw_text, role, action_type):
+    result = parse_action(raw_text, role)
 
     assert isinstance(result, Action)
-    assert result.actor == "seller"
-    assert result.proposal.proposal_id == "offer-1"
-
-
-def test_parse_markdown_wrapped_json():
-    result = parse_action(
-        "```json\n{\"action_type\":\"ACCEPT\",\"proposal_id\":\"offer-1\"}\n```",
-        "buyer",
-    )
-
-    assert isinstance(result, Action)
-    assert result.action_type == "ACCEPT"
-    assert result.actor == "buyer"
+    assert result.action_type == action_type
+    assert result.actor == role
+    if action_type == "PROPOSE":
+        assert result.proposal.proposal_id == "offer-1"
 
 
 def test_reject_malformed_json():

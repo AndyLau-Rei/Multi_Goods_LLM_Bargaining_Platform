@@ -34,7 +34,11 @@ def _engine_with_feasible_reservations() -> NegotiationEngine:
 def test_agreement():
     engine = _engine_with_feasible_reservations()
     offer = _proposal("offer-1")
-    state = _run(engine, [Action("PROPOSE", offer.proposal_id, offer)], [Action("ACCEPT", offer.proposal_id)])
+    state = _run(
+        engine,
+        [Action("PROPOSE", offer.proposal_id, offer)],
+        [Action("ACCEPT", offer.proposal_id)],
+    )
 
     assert state.outcome.status == "AGREEMENT"
     assert state.outcome.final_proposal_id == offer.proposal_id

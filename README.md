@@ -168,13 +168,17 @@ uvicorn bargaining_platform.api:app --reload
 Start a mock run and inspect it:
 
 ```powershell
-curl -X POST http://127.0.0.1:8000/runs `
+curl.exe -X POST http://127.0.0.1:8000/runs `
   -H "Content-Type: application/json" `
   -d '{"scenario_id":"scenarios/shop_bundle.json","agent_type":"mock"}'
-curl http://127.0.0.1:8000/runs/RUN_ID/status
-curl "http://127.0.0.1:8000/runs/RUN_ID/view?role=buyer"
-curl http://127.0.0.1:8000/runs/RUN_ID/events
+curl.exe http://127.0.0.1:8000/runs/RUN_ID/status
+curl.exe http://127.0.0.1:8000/runs/RUN_ID/view `
+  -H "Authorization: Bearer $env:BUYER_API_SECRET"
+curl.exe http://127.0.0.1:8000/runs/RUN_ID/events
 ```
 
 Set `BARGAINING_DB_PATH` to use a different SQLite file. Role-scoped views are built with
 `make_private_view`, so they contain only the requested role's private profile and public state.
+The local `/view` endpoint derives the role from a Bearer token. Set both
+`BUYER_API_SECRET` and `SELLER_API_SECRET` before serving the API; requests are
+rejected when either secret is missing or both secrets are identical.

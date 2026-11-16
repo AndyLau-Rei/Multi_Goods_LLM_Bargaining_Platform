@@ -61,7 +61,9 @@ class EventLogger:
             actor=actor,
             raw_output=json_safe(raw_output) if raw_output is not None else None,
             parsed_action=json_safe(parsed_action) if parsed_action is not None else None,
-            validation_result=json_safe(validation_result) if validation_result is not None else None,
+            validation_result=(
+                json_safe(validation_result) if validation_result is not None else None
+            ),
             state_transition_summary=state_transition_summary,
             private_decision_summary=private_decision_summary,
             metadata=json_safe(metadata) if metadata is not None else None,
@@ -313,7 +315,10 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
     if len(expected_transcript) != len(actual_transcript):
         raise ReplayDivergenceError("Public transcript length diverged")
     for expected, actual in zip(expected_transcript, actual_transcript):
-        if expected["action_type"] != actual["action_type"] or expected["proposal_id"] != actual["proposal_id"]:
+        if (
+            expected["action_type"] != actual["action_type"]
+            or expected["proposal_id"] != actual["proposal_id"]
+        ):
             raise ReplayDivergenceError("Public transcript diverged")
         if expected.get("proposal") is not None:
             expected_proposal = expected["proposal"]
@@ -353,7 +358,10 @@ def _restore_action_numbers(action_data: dict) -> dict:
     for condition in proposal.get("conditions", []):
         condition["discount_per_unit"] = _restore_number(condition.get("discount_per_unit"))
     for name in ("original_prices", "effective_prices"):
-        proposal[name] = {key: _restore_number(value) for key, value in proposal.get(name, {}).items()}
+        proposal[name] = {
+            key: _restore_number(value)
+            for key, value in proposal.get(name, {}).items()
+        }
     return action
 
 

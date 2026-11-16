@@ -38,12 +38,18 @@ class NegotiationEngine:
             raise RuntimeError("Negotiation has ended")
 
         actor = role if role is not None else (
-            action.actor if isinstance(action, Action) and action.actor is not None else state.current_actor
+            action.actor
+            if isinstance(action, Action) and action.actor is not None
+            else state.current_actor
         )
         if isinstance(action, str):
             raw_output = action
             action = parse_action(raw_output, actor)
-        result = action if isinstance(action, ValidationResult) else validate_action(actor, action, state)
+        result = (
+            action
+            if isinstance(action, ValidationResult)
+            else validate_action(actor, action, state)
+        )
         utility_metrics = None
         if result.ok and isinstance(action, Action) and action.action_type == "ACCEPT":
             result = validate_reservation_utilities(state.active_proposal, state)

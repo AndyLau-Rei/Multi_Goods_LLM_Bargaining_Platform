@@ -1,7 +1,7 @@
 from copy import deepcopy
 
 from bargaining_platform.engine import NegotiationEngine
-from bargaining_platform.models import Action, Condition, Proposal, Term
+from bargaining_platform.models import Action, Condition, Proposal, Term, ValidationResult
 from bargaining_platform.scenario import load_scenario
 from bargaining_platform.validator import calculate_effective_totals
 
@@ -74,6 +74,18 @@ def test_discount_exceeding_scenario_cap_is_rejected():
     assert "30" not in result.message
 
 
+def test_duplicate_conditions_exceed_aggregate_cap():
+    engine = _engine()
+    proposal = _proposal()
+    proposal.conditions.append(deepcopy(proposal.conditions[0]))
+
+    result = engine.step(Action("PROPOSE", proposal.proposal_id, proposal))
+
+    assert result.error_code == "DISCOUNT_EXCEEDS_CAP"
+    assert engine.state.active_proposal is None
+    assert engine.state.public_transcript == []
+
+
 def test_discount_below_seller_floor_is_rejected():
     engine = _engine()
     proposal = _proposal(discount=25)
@@ -97,3 +109,17 @@ def test_engine_stores_computed_effective_prices():
     assert state.active_proposal.effective_prices == {"A": 100, "B": 60}
     assert state.public_transcript[0]["proposal"]["effective_prices"] == {"A": 100, "B": 60}
     assert proposal.effective_prices == {"A": 120, "B": 60}
+
+
+def test_malformed_term_returns_controlled_validation_result():
+    engine = _engine()
+    proposal = _proposal(terms=[Term("purchase", None, None, 120, unit="piece")])
+    before = deepcopy(proposal)
+
+    result = calculate_effective_totals(proposal, engine.state)
+
+    assert isinstance(result, ValidationResult)
+    assert result.ok is False
+    assert result.error_code == "MALFORMED_TERM"
+    assert proposal == before
+    assert engine.state.public_transcript == []

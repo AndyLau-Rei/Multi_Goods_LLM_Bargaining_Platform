@@ -74,4 +74,6 @@ def test_large_integer_and_mixed_decimal_totals_stay_exact():
     assert totals["original_total"] == 2 * price
 
     proposal.terms.append(Term("purchase", "B", 1, 0.1, unit="piece"))
-    assert calculate_original_totals(proposal, {"A": 5, "B": 5})["original_total"] == Decimal(f"{2 * price}.1")
+    assert calculate_original_totals(
+        proposal, {"A": 5, "B": 5}
+    )["original_total"] == Decimal(f"{2 * price}.1")
