@@ -155,4 +155,26 @@ pytest -q
 - `bargaining_platform/experiments.py` — repeated runs and config comparison.
 - `bargaining_platform/metrics.py` — aggregate metrics and failure reports.
 
-The project intentionally has no web API or UI yet; those belong to later Phase 7 tickets.
+The project does not include a browser UI; the backend API is available for later clients.
+
+## Backend API
+
+Install the development dependencies, then start the synchronous API with:
+
+```powershell
+uvicorn bargaining_platform.api:app --reload
+```
+
+Start a mock run and inspect it:
+
+```powershell
+curl -X POST http://127.0.0.1:8000/runs `
+  -H "Content-Type: application/json" `
+  -d '{"scenario_id":"scenarios/shop_bundle.json","agent_type":"mock"}'
+curl http://127.0.0.1:8000/runs/RUN_ID/status
+curl "http://127.0.0.1:8000/runs/RUN_ID/view?role=buyer"
+curl http://127.0.0.1:8000/runs/RUN_ID/events
+```
+
+Set `BARGAINING_DB_PATH` to use a different SQLite file. Role-scoped views are built with
+`make_private_view`, so they contain only the requested role's private profile and public state.
