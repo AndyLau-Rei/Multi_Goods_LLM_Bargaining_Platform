@@ -1,15 +1,18 @@
-"""Small synchronous FastAPI facade for the bargaining engine."""
+"""FastAPI facade for the bargaining engine."""
 
 from __future__ import annotations
 
+import logging
 import os
+import uuid
 from copy import deepcopy
 from decimal import Decimal
 from hmac import compare_digest
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -27,6 +30,11 @@ from .validator import _multiply_money, _sum_money
 app = FastAPI(title="Bargaining Platform API", version="0.1.0")
 _STATIC_DIR = Path(__file__).with_name("static")
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+# shortcut: progress lives in one API worker, use shared storage for multi-worker serving.
+_active_runs: dict[str, dict[str, Any]] = {}
+_active_runs_lock = Lock()
+_logger = logging.getLogger(__name__)
 
 _PUBLIC_METRIC_FIELDS = {
     "run_count",
@@ -67,30 +75,68 @@ def _public_metrics(metrics: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-@app.post("/runs")
-def start_run(request: RunRequest) -> dict[str, str]:
-    """Run one negotiation synchronously and return its persisted run ID."""
+def _run_in_background(run_id: str, scenario: dict, agent_type: str, db_path: Path) -> None:
     try:
-        scenario = load_scenario(request.scenario_id)
-        use_mock = request.agent_type == "mock" or not os.getenv("LLM_API_KEY")
+        use_mock = agent_type == "mock" or not os.getenv("LLM_API_KEY")
         if use_mock:
             adapters = default_mock_adapters()
         else:
             adapter = OpenAIAdapter()
             adapters = {"seller": adapter, "buyer": adapter}
-        engine = run_llm_negotiation(
+
+        def publish(progress: dict) -> None:
+            with _active_runs_lock:
+                active = _active_runs[run_id]
+                active["round_number"] = progress["round_number"]
+                for event in progress["events"]:
+                    if "public_transcript" in event:
+                        event = {**event, "public_transcript": _public_action(event["public_transcript"])}
+                    active["events"].append(event)
+
+        run_llm_negotiation(
             scenario,
             adapters,
-            db_path=_db_path(),
+            run_id=run_id,
+            db_path=db_path,
             mock_demo=use_mock,
+            progress_callback=publish,
         )
+    except Exception:
+        _logger.exception("Background negotiation failed for run %s", run_id)
+        with _active_runs_lock:
+            _active_runs[run_id]["status"] = "ERROR"
+    else:
+        # The saved run is readable before the in-memory copy disappears.
+        with _active_runs_lock:
+            del _active_runs[run_id]
+
+
+@app.post("/runs", status_code=202)
+def start_run(request: RunRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
+    """Schedule one negotiation and return its run ID immediately."""
+    try:
+        scenario = load_scenario(request.scenario_id)
     except (OSError, KeyError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail="Run could not be started") from exc
-    return {"run_id": engine.run_id}
+    run_id = f"run-{uuid.uuid4().hex}"
+    with _active_runs_lock:
+        _active_runs[run_id] = {"status": "IN_PROGRESS", "round_number": 1, "events": []}
+    background_tasks.add_task(_run_in_background, run_id, scenario, request.agent_type, _db_path())
+    return {"run_id": run_id}
 
 
 @app.get("/runs/{run_id}/status")
 def run_status(run_id: str) -> dict[str, Any]:
+    with _active_runs_lock:
+        active = _active_runs.get(run_id)
+        if active is not None:
+            status = active["status"]
+            return {
+                "run_id": run_id,
+                "status": status,
+                "round": active["round_number"],
+                "outcome": {"status": status} if status != "IN_PROGRESS" else None,
+            }
     try:
         run = load_run_from_sqlite(run_id, _db_path())
     except KeyError as exc:
@@ -109,6 +155,14 @@ def run_status(run_id: str) -> dict[str, Any]:
 @app.get("/runs/{run_id}/events")
 def run_events(run_id: str) -> dict[str, Any]:
     """Return replayed public actions and transition summaries only."""
+    with _active_runs_lock:
+        active = _active_runs.get(run_id)
+        if active is not None:
+            return {
+                "run_id": run_id,
+                "round_number": active["round_number"],
+                "events": deepcopy(active["events"]),
+            }
     try:
         run = load_run_from_sqlite(run_id, _db_path())
         state = replay_run(run_id, _db_path())

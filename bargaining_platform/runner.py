@@ -4,6 +4,7 @@ import json
 import uuid
 from copy import deepcopy
 from pathlib import Path
+from typing import Callable
 
 from .engine import NegotiationEngine
 from .model_adapter import BaseLLMAdapter, MockLLMAdapter
@@ -22,6 +23,7 @@ def run_llm_negotiation(
     condition_id: str | None = None,
     seller_prompt_path: str | Path | None = None,
     buyer_prompt_path: str | Path | None = None,
+    progress_callback: Callable[[dict], None] | None = None,
 ) -> NegotiationEngine:
     """Run role-scoped generation until a terminal outcome and persist the run."""
     if mock_demo:
@@ -39,12 +41,31 @@ def run_llm_negotiation(
         prompt = render_prompt(role, private_view, template_path=prompt_path)
         generated = adapter.generate(prompt, _action_schema())
         parsed = parse_action(generated.text, role)
+        event_count = len(engine.event_logger.events)
+        transcript_count = len(engine.state.public_transcript)
         engine.step(
             parsed,
             role=role,
             raw_output=generated.text,
             metadata={"prompt": prompt, **generated.metadata},
         )
+        if progress_callback is not None:
+            public_actions = iter(engine.state.public_transcript[transcript_count:])
+            public_events = []
+            for event in engine.event_logger.events[event_count:]:
+                record = {
+                    "event_id": event.event_id,
+                    "event_type": event.event_type,
+                    "actor": event.actor,
+                }
+                if event.event_type == "ACTION_ATTEMPT" and event.validation_result["ok"]:
+                    record["public_transcript"] = deepcopy(next(public_actions))
+                elif event.event_type == "STATE_TRANSITION":
+                    record["state_transition_summary"] = event.state_transition_summary
+                else:
+                    continue
+                public_events.append(record)
+            progress_callback({"round_number": engine.state.round_number, "events": public_events})
     save_run_to_sqlite(
         run_id,
         scenario,

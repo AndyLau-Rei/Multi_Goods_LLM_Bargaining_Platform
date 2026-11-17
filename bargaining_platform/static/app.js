@@ -1,7 +1,13 @@
 const $ = (id) => document.getElementById(id);
 let pollTimer;
+let lastEventId = 0;
+let watchGeneration = 0;
 
-function setMessage(text) { $("message").textContent = text || ""; }
+function setMessage(text, isError = false) {
+  const message = $("message");
+  message.textContent = text || "";
+  message.className = `mb-4 min-h-5 text-sm ${isError ? "text-red-600" : "text-gray-400"}`;
+}
 function money(value) { return value === undefined || value === null ? "—" : String(value); }
 
 function proposalText(proposal) {
@@ -16,11 +22,13 @@ function proposalText(proposal) {
   return lines.join("\n");
 }
 
-function renderEvents(events, roundNumber) {
+function renderEvents(events, roundNumber, inProgress) {
   const transcript = $("transcript");
-  transcript.replaceChildren();
+  transcript.querySelector("[data-thinking]")?.remove();
   const publicEvents = events.filter((event) => event.event_type === "ACTION_ATTEMPT" && event.public_transcript);
   events.forEach((event) => {
+    if (event.event_id <= lastEventId) return;
+    lastEventId = event.event_id;
     if (event.event_type === "STATE_TRANSITION" && event.state_transition_summary) {
       const system = document.createElement("p");
       system.className = "text-center text-xs text-gray-400";
@@ -47,16 +55,26 @@ function renderEvents(events, roundNumber) {
     bubble.append(badge, content);
     transcript.appendChild(bubble);
   });
-  if (!publicEvents.length) {
+  if (publicEvents.length) {
+    transcript.querySelector("[data-empty]")?.remove();
+  } else if (!transcript.querySelector("[data-empty]")) {
     const empty = document.createElement("p");
+    empty.dataset.empty = "";
     empty.className = "text-center text-sm text-gray-400";
     empty.textContent = "No public actions yet.";
     transcript.prepend(empty);
   }
+  if (inProgress) {
+    const thinking = document.createElement("p");
+    thinking.dataset.thinking = "";
+    thinking.className = "flex items-center justify-center gap-2 text-xs text-gray-400";
+    thinking.innerHTML = '<span class="h-3 w-3 animate-spin rounded-full border-2 border-gray-200 border-t-gray-500" aria-hidden="true"></span>Agent is thinking...';
+    transcript.appendChild(thinking);
+  }
   $("metric-round").textContent = money(roundNumber);
 }
 
-async function refresh(runId) {
+async function refresh(runId, generation) {
   const [eventsResponse, statusResponse] = await Promise.all([
     fetch(`/runs/${encodeURIComponent(runId)}/events`),
     fetch(`/runs/${encodeURIComponent(runId)}/status`),
@@ -64,31 +82,52 @@ async function refresh(runId) {
   if (!eventsResponse.ok || !statusResponse.ok) throw new Error("Run could not be loaded");
   const events = await eventsResponse.json();
   const status = await statusResponse.json();
-  renderEvents(events.events || [], events.round_number);
+  if (generation !== watchGeneration) return false;
   const outcome = status.outcome || {};
+  const outcomeLabel = status.status || outcome.status || "IN_PROGRESS";
+  renderEvents(events.events || [], events.round_number, outcomeLabel === "IN_PROGRESS");
   $("metric-run").textContent = runId;
-  const outcomeLabel = outcome.status || "IN_PROGRESS";
   $("metric-outcome").textContent = outcomeLabel;
   $("metric-outcome").className = `rounded-full px-3 py-1 text-xs font-semibold ${outcomeLabel === "AGREEMENT" ? "bg-green-50 text-green-700" : outcomeLabel === "IN_PROGRESS" ? "bg-gray-100 text-gray-500" : "bg-amber-50 text-amber-700"}`;
   const metrics = Object.values(status.metrics || {})[0] || {};
   $("metric-agreement").textContent = money(metrics.agreement_rate);
   $("metric-bundles").textContent = money(metrics.bundle_frequency);
   $("metric-average-rounds").textContent = money(metrics.average_rounds);
-  return outcome.status && outcome.status !== "IN_PROGRESS";
+  return outcomeLabel;
 }
 
 async function watch(runId) {
   clearInterval(pollTimer);
+  const generation = ++watchGeneration;
+  lastEventId = 0;
+  $("transcript").replaceChildren();
+  renderEvents([], 1, true);
   setMessage(`Loading run ${runId}…`);
+  let busy = false;
+  let stopped = false;
   const tick = async () => {
+    if (busy || stopped) return;
+    busy = true;
     try {
-      const done = await refresh(runId);
-      setMessage(done ? `Run ${runId} complete.` : `Run ${runId} is in progress…`);
-      if (done) clearInterval(pollTimer);
-    } catch (error) { setMessage(error.message); clearInterval(pollTimer); }
+      const status = await refresh(runId, generation);
+      if (generation !== watchGeneration) return;
+      if (status === "ERROR") {
+        setMessage("Negotiation failed due to a system error.", true);
+      } else {
+        setMessage(status === "IN_PROGRESS" ? `Run ${runId} is in progress…` : `Run ${runId} complete.`);
+      }
+      if (status !== "IN_PROGRESS") { stopped = true; clearInterval(pollTimer); }
+    } catch (error) {
+      if (generation !== watchGeneration) return;
+      stopped = true;
+      $("transcript").querySelector("[data-thinking]")?.remove();
+      setMessage(error.message, true);
+      clearInterval(pollTimer);
+    }
+    finally { busy = false; }
   };
   await tick();
-  if ($("metric-outcome").textContent === "IN_PROGRESS") pollTimer = setInterval(tick, 1000);
+  if (!stopped && generation === watchGeneration) pollTimer = setInterval(tick, 1000);
 }
 
 $("start").addEventListener("click", async () => {

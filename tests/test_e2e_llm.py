@@ -98,3 +98,30 @@ def test_llm_metadata_logging(tmp_path):
         assert "PRIVATE CONSTRAINTS" in event.metadata["prompt"]
     saved = load_run_from_sqlite("e2e-3", tmp_path / "runs.db")
     assert saved["events"][0]["metadata"]["model_version"] == "mock"
+
+
+def test_progress_callback_publishes_only_committed_public_events(tmp_path):
+    proposal = _proposal()
+    proposal["decision_summary"] = "seller-only note"
+    adapters = {
+        "seller": MockLLMAdapter([
+            '{"bad_json": true}',
+            json.dumps({"action_type": "PROPOSE", "proposal_id": "e2e-1", "proposal": proposal}),
+        ]),
+        "buyer": MockLLMAdapter([json.dumps({"action_type": "ACCEPT", "proposal_id": "e2e-1"})]),
+    }
+    progress = []
+
+    run_llm_negotiation(
+        _scenario(), adapters, run_id="progress", db_path=tmp_path / "runs.db",
+        progress_callback=progress.append,
+    )
+
+    assert len(progress) == 3
+    assert progress[0]["events"] == []
+    assert [event["event_id"] for update in progress for event in update["events"]] == [2, 3, 4, 5]
+    assert progress[-1]["events"][-1]["state_transition_summary"] == "Proposal accepted; game ended"
+    assert progress[-1]["round_number"] == 1
+    serialized = json.dumps(progress)
+    for private_field in ("raw_output", "metadata", "validation_result", "private_decision_summary", "seller-only note"):
+        assert private_field not in serialized

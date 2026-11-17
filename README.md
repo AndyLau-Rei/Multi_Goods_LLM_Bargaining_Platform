@@ -159,7 +159,7 @@ The negotiation viewer is available at `http://127.0.0.1:8000/` while the backen
 
 ## Backend API
 
-Install the development dependencies, then start the synchronous API with:
+Install the development dependencies, then start the API with:
 
 ```powershell
 uvicorn bargaining_platform.api:app --reload
@@ -176,6 +176,10 @@ curl.exe http://127.0.0.1:8000/runs/RUN_ID/view `
   -H "Authorization: Bearer $env:BUYER_API_SECRET"
 curl.exe http://127.0.0.1:8000/runs/RUN_ID/events
 ```
+
+`POST /runs` returns `202 Accepted` with a run ID immediately. The viewer polls
+status and public events every second while the run is active. Live progress is
+kept in one API worker's memory; completed runs are read from SQLite.
 
 Set `BARGAINING_DB_PATH` to use a different SQLite file. Role-scoped views are built with
 `make_private_view`, so they contain only the requested role's private profile and public state.

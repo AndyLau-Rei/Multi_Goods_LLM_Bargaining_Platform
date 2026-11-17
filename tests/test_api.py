@@ -1,7 +1,10 @@
 import json
+from unittest.mock import patch
 
+from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 
+from bargaining_platform import api as api_module
 from bargaining_platform.api import _public_action, app
 from bargaining_platform.model_adapter import MockLLMAdapter
 from bargaining_platform.runner import run_llm_negotiation
@@ -10,14 +13,27 @@ from bargaining_platform.scenario import load_scenario
 
 def test_start_run_and_get_status(tmp_path, monkeypatch):
     monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
-    response = TestClient(app).post(
-        "/runs",
-        json={"scenario_id": "scenarios/shop_bundle.json", "agent_type": "mock"},
-    )
-    assert response.status_code == 200
+    scheduled = []
+
+    def capture_task(_background_tasks, function, *args, **kwargs):
+        scheduled.append((function, args, kwargs))
+
+    client = TestClient(app)
+    with patch.object(BackgroundTasks, "add_task", capture_task):
+        response = client.post(
+            "/runs",
+            json={"scenario_id": "scenarios/shop_bundle.json", "agent_type": "mock"},
+        )
+    assert response.status_code == 202
     run_id = response.json()["run_id"]
 
-    status = TestClient(app).get(f"/runs/{run_id}/status")
+    status = client.get(f"/runs/{run_id}/status")
+    assert status.status_code == 200
+    assert status.json()["status"] == "IN_PROGRESS"
+
+    function, args, kwargs = scheduled.pop()
+    function(*args, **kwargs)
+    status = client.get(f"/runs/{run_id}/status")
     assert status.status_code == 200
     assert status.json()["outcome"]["status"] == "AGREEMENT"
     serialized = json.dumps(status.json(), sort_keys=True)
@@ -27,6 +43,56 @@ def test_start_run_and_get_status(tmp_path, monkeypatch):
     assert "joint_utility" not in serialized
     assert "gft" not in serialized
     assert "npb" not in serialized
+
+
+def test_background_failure_marks_run_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
+
+    def fail_run(*args, **kwargs):
+        raise RuntimeError("generation failed")
+
+    monkeypatch.setattr(api_module, "run_llm_negotiation", fail_run)
+    scheduled = []
+
+    def capture_task(_background_tasks, function, *args, **kwargs):
+        scheduled.append((function, args, kwargs))
+
+    client = TestClient(app)
+    with patch.object(BackgroundTasks, "add_task", capture_task):
+        response = client.post(
+            "/runs",
+            json={"scenario_id": "scenarios/shop_bundle.json", "agent_type": "mock"},
+        )
+    run_id = response.json()["run_id"]
+    function, args, kwargs = scheduled.pop()
+    function(*args, **kwargs)
+
+    status = client.get(f"/runs/{run_id}/status")
+    assert status.status_code == 200
+    assert status.json()["status"] == "ERROR"
+
+
+def test_in_progress_status_and_events(monkeypatch):
+    public_event = {
+        "event_id": 2,
+        "event_type": "STATE_TRANSITION",
+        "actor": "seller",
+        "state_transition_summary": "Proposal updated",
+    }
+    monkeypatch.setattr(api_module, "_active_runs", {
+        "live": {"status": "IN_PROGRESS", "round_number": 2, "events": [public_event]}
+    })
+    client = TestClient(app)
+
+    status = client.get("/runs/live/status")
+    events = client.get("/runs/live/events")
+    assert status.status_code == 200
+    assert status.json()["status"] == "IN_PROGRESS"
+    assert status.json()["round"] == 2
+    assert events.json() == {
+        "run_id": "live", "round_number": 2, "events": [public_event],
+    }
+    assert "private_decision_summary" not in json.dumps(events.json())
 
 
 def test_view_privacy_isolation(tmp_path, monkeypatch):
