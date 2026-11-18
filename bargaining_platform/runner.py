@@ -130,7 +130,13 @@ def run_llm_negotiation(
             },
         )
         if isinstance(result, ValidationResult) and not result.ok:
-            agent.report_validation(result)
+            if engine.state.outcome is None and engine.state.current_actor != role:
+                agents[engine.state.current_actor].messages.append({
+                    "role": "user",
+                    "content": "The latest proposal could not be accepted. Review its terms and counter or walk away.",
+                })
+            else:
+                agent.report_validation(result)
         if progress_callback is not None:
             public_actions = iter(engine.state.public_transcript[transcript_count:])
             public_events = []
@@ -225,7 +231,7 @@ def _action_schema() -> dict:
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["action_type", "proposal_id"],
+        "required": ["action_type"],
         "properties": {
             "action_type": {
                 "type": "string",
@@ -235,7 +241,7 @@ def _action_schema() -> dict:
             "proposal": {
                 "type": ["object", "null"],
                 "properties": {
-                    "proposal_id": {"type": "string"},
+                    "proposal_id": {"type": ["string", "null"]},
                     "acceptance_mode": {"type": "string", "enum": ["all_or_nothing"]},
                     "terms": {"type": "array"},
                     "conditions": {"type": "array"},

@@ -72,6 +72,41 @@ def test_e2e_llm_retry_on_bad_json(tmp_path):
     assert engine.event_logger.events[0].validation_result["error_code"] == "SCHEMA_VIOLATION"
 
 
+def test_id_free_exploratory_offer_can_be_revised_after_rejected_acceptance(tmp_path):
+    proposal = _proposal()
+    proposal["terms"][0]["unit_price"] = 79
+    proposal["terms"][1]["unit_price"] = 60
+    proposal.pop("proposal_id")
+    proposal.pop("original_prices")
+    proposal.pop("effective_prices")
+    revised = json.loads(json.dumps(proposal))
+    revised["terms"][0]["unit_price"] = 100
+
+    adapters = {
+        "seller": MockLLMAdapter([
+            json.dumps({"action_type": "PROPOSE", "proposal": proposal}),
+            json.dumps({"action_type": "COUNTER", "proposal": revised}),
+        ]),
+        "buyer": MockLLMAdapter([
+            json.dumps({"action_type": "ACCEPT"}),
+            json.dumps({"action_type": "ACCEPT"}),
+        ]),
+    }
+
+    engine = run_llm_negotiation(
+        _scenario(), adapters, run_id="id-free-revision", db_path=tmp_path / "runs.db"
+    )
+
+    assert engine.state.outcome.status == "AGREEMENT"
+    assert engine.state.outcome.final_proposal_id == "proposal-2"
+    assert any(
+        event.validation_result.get("error_code") == "PRICE_BELOW_FLOOR"
+        for event in engine.event_logger.events
+        if event.event_type == "ACTION_ATTEMPT"
+    )
+    assert replay_run("id-free-revision", tmp_path / "runs.db").outcome.status == "AGREEMENT"
+
+
 def test_llm_metadata_logging(tmp_path):
     proposal = _proposal()
     proposal["proposal_id"] = "e2e-3"

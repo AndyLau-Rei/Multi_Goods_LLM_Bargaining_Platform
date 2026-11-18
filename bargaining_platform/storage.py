@@ -267,6 +267,7 @@ class ReplayDivergenceError(RuntimeError):
 def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
     """Replay persisted actions in a fresh engine and verify deterministic results."""
     from .engine import NegotiationEngine
+    from .utility import validate_reservation_utilities
     from .validator import calculate_effective_totals, parse_action, validate_action
 
     run = load_run_from_sqlite(run_id, db_path)
@@ -275,6 +276,7 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
     transition_events = [
         event for event in run["events"] if event["event_type"] == "STATE_TRANSITION"
     ]
+    transitions_by_id = {event["event_id"]: event for event in transition_events}
     transitions_seen = 0
     valid_actions = []
 
@@ -312,7 +314,27 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
                         and calculate_effective_totals(action.proposal, engine.state)["effective_total"]
                         > Decimal(str(engine.state.private_profiles["buyer"]["budget"]))
                     )
+                legacy_acceptance_rejection = (
+                    action.action_type == "ACCEPT"
+                    and not event["validation_result"]["ok"]
+                    and not (
+                        event["event_id"] + 1 in transitions_by_id
+                        and transitions_by_id[event["event_id"] + 1]["state_transition_summary"]
+                        in {"Maximum rounds reached", "Acceptance rejected; turn switched to seller",
+                            "Acceptance rejected; turn switched to buyer"}
+                    )
+                )
+                if legacy_acceptance_rejection:
+                    current_result = validate_action(event["actor"], action, engine.state)
+                    if current_result.ok:
+                        current_result = validate_reservation_utilities(
+                            engine.state.active_proposal, engine.state
+                        )
+                    if current_result.to_dict() != event["validation_result"]:
+                        raise ReplayDivergenceError("Legacy acceptance validation diverged")
                 engine.step(
+                    ValidationResult(**event["validation_result"])
+                    if legacy_acceptance_rejection else
                     ValidationResult(False, "BUDGET_EXCEEDED", "The proposed total exceeds the allowed budget")
                     if legacy_budget_rejection else action,
                     role=event["actor"],

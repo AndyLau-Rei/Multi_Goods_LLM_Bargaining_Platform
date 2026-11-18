@@ -45,6 +45,18 @@ class NegotiationEngine:
         if isinstance(action, str):
             raw_output = action
             action = parse_action(raw_output, actor)
+        if raw_output is not None and isinstance(action, Action):
+            action = deepcopy(action)
+            if action.action_type in {"PROPOSE", "COUNTER"} and action.proposal is not None:
+                action.proposal.proposal_id = (
+                    action.proposal.proposal_id or f"proposal-{len(state.public_transcript) + 1}"
+                )
+                action.proposal_id = (
+                    state.active_proposal.proposal_id
+                    if state.active_proposal is not None else action.proposal.proposal_id
+                )
+            elif action.action_type == "ACCEPT" and state.active_proposal is not None:
+                action.proposal_id = state.active_proposal.proposal_id
         result = (
             action
             if isinstance(action, ValidationResult)
@@ -74,6 +86,28 @@ class NegotiationEngine:
             "validation": result.to_dict(),
         })
         if not result.ok:
+            if (
+                isinstance(action, Action)
+                and action.action_type == "ACCEPT"
+                and result.error_code not in {
+                    "INVALID_ACTION_SCHEMA", "WRONG_ACTOR", "WRONG_TURN",
+                    "INVALID_ACTION_TYPE", "ACTION_NOT_ALLOWED", "NO_ACTIVE_PROPOSAL",
+                    "STALE_PROPOSAL_ID", "MUTATION_ON_ACCEPT",
+                }
+            ):
+                state.invalid_attempts = 0
+                self.action_count += 1
+                if self.action_count >= 2 * self.max_rounds:
+                    state.outcome = Outcome("MAX_ROUNDS")
+                    summary = "Maximum rounds reached"
+                else:
+                    state.current_actor = state.public_transcript[-1]["actor"]
+                    state.round_number = 1 + self.action_count // 2
+                    summary = f"Acceptance rejected; turn switched to {state.current_actor}"
+                self.event_logger.append(
+                    "STATE_TRANSITION", actor, state_transition_summary=summary,
+                )
+                return result
             state.invalid_attempts += 1
             if state.invalid_attempts > 1:
                 state.outcome = Outcome("INVALID_ACTION")

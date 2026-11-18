@@ -120,3 +120,34 @@ def test_replay_legacy_budget_rejection_checks_raw_action(tmp_path):
         )
     with pytest.raises(ReplayDivergenceError):
         replay_run("legacy", database)
+
+
+def test_replay_legacy_rejected_acceptance_retries(tmp_path):
+    scenario = load_scenario("scenarios/single_product.json")
+    engine = NegotiationEngine(scenario)
+    proposal = Proposal(
+        "legacy-accept", "all_or_nothing",
+        [Term("purchase", "A", 1, 900, unit="piece")],
+        [], "", {"A": 900}, {"A": 900},
+    )
+    engine.step(Action("PROPOSE", proposal.proposal_id, proposal))
+    action = Action("ACCEPT", proposal.proposal_id)
+    rejection = ValidationResult(
+        False, "PRICE_BELOW_FLOOR", "The proposed price is invalid"
+    ).to_dict()
+    attempt = engine.event_logger.append(
+        "ACTION_ATTEMPT", "buyer", raw_output=json.dumps(action.to_dict()),
+        parsed_action=action.to_dict(), validation_result=rejection,
+    )
+    terminal = engine.event_logger.append(
+        "STATE_TRANSITION", "buyer",
+        state_transition_summary="Game ended: invalid action retry exhausted",
+    )
+    database = tmp_path / "legacy-accept.db"
+    save_run_to_sqlite(
+        "legacy-accept", scenario, Outcome("INVALID_ACTION"),
+        (*engine.event_logger.events[:2], attempt, replace(attempt, event_id=4),
+         replace(terminal, event_id=5)), database
+    )
+
+    assert replay_run("legacy-accept", database).outcome.status == "INVALID_ACTION"

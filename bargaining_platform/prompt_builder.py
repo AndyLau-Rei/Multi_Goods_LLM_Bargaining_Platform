@@ -68,8 +68,8 @@ def render_prompt(
     )
     action_schema = {
         "action_type": "PROPOSE | COUNTER | ACCEPT | WALK_AWAY",
-        "proposal_id": "string or null",
-        "proposal": "Proposal object for PROPOSE/COUNTER, otherwise null",
+        "proposal_id": "optional; the platform supplies or resolves it",
+        "proposal": "price/package object for PROPOSE/COUNTER, otherwise null",
     }
     example = {
         "action_type": "ACCEPT",

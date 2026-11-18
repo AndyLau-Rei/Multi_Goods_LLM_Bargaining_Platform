@@ -89,3 +89,29 @@ def test_parse_error_is_logged_and_uses_existing_retry_policy():
     assert event.raw_output == raw_text
     assert event.parsed_action is None
     assert event.validation_result["error_code"] == "MALFORMED_JSON"
+
+
+def test_model_can_omit_or_misstate_proposal_ids():
+    engine = NegotiationEngine(load_scenario("scenarios/shop_bundle.json"))
+    proposal = _proposal_payload()
+    proposal.pop("proposal_id")
+    proposal.pop("original_prices")
+    proposal.pop("effective_prices")
+
+    first = engine.step(
+        json.dumps({"action_type": "PROPOSE", "proposal": proposal}),
+        role="seller",
+    )
+    assert first.active_proposal.proposal_id == "proposal-1"
+
+    proposal["terms"][0]["unit_price"] = 110
+    second = engine.step(
+        json.dumps({
+            "action_type": "COUNTER",
+            "proposal_id": "stale-model-id",
+            "proposal": proposal,
+        }),
+        role="buyer",
+    )
+    assert second.active_proposal.proposal_id == "proposal-2"
+    assert second.invalid_attempts == 0

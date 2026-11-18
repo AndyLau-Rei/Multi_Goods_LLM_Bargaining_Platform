@@ -86,7 +86,7 @@ def test_duplicate_conditions_exceed_aggregate_cap():
     assert engine.state.public_transcript == []
 
 
-def test_discount_below_seller_floor_is_rejected():
+def test_discount_below_seller_floor_is_deferred_until_acceptance():
     engine = _engine()
     proposal = _proposal(discount=25)
     proposal.terms[0].unit_price = 100
@@ -95,9 +95,8 @@ def test_discount_below_seller_floor_is_rejected():
 
     result = engine.step(Action("PROPOSE", proposal.proposal_id, proposal))
 
-    assert result.error_code == "DISCOUNT_BELOW_FLOOR"
-    assert engine.state.active_proposal is None
-    assert "80" not in result.message
+    assert result.active_proposal.terms[0].unit_price == 100
+    assert engine.state.current_actor == "buyer"
 
 
 def test_engine_stores_computed_effective_prices():

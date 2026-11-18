@@ -34,7 +34,7 @@ def test_rejects_quantity_above_stock(quantities):
     assert engine.state.active_proposal is None
 
 
-def test_rejects_price_below_floor_without_leaking_floor():
+def test_allows_price_below_floor_until_acceptance():
     engine = _engine()
     offer = _proposal("offer-1")
     offer.terms[0].unit_price = 79
@@ -43,9 +43,26 @@ def test_rejects_price_below_floor_without_leaking_floor():
 
     result = engine.step(Action("PROPOSE", offer.proposal_id, offer))
 
+    assert result.active_proposal.terms[0].unit_price == 79
+    assert engine.state.current_actor == "buyer"
+
+
+def test_invalid_acceptance_returns_to_proposer_for_revision():
+    engine = _engine()
+    opening = _proposal("opening")
+    counter = _proposal("counter")
+    counter.terms[0].unit_price = 79
+    counter.original_prices["A"] = 79
+    counter.effective_prices["A"] = 79
+
+    engine.step(Action("PROPOSE", opening.proposal_id, opening))
+    engine.step(Action("COUNTER", opening.proposal_id, counter))
+    result = engine.step(Action("ACCEPT", counter.proposal_id))
+
     assert result.error_code == "PRICE_BELOW_FLOOR"
-    assert "80" not in result.message
-    assert engine.state.active_proposal is None
+    assert engine.state.outcome is None
+    assert engine.state.current_actor == "buyer"
+    assert engine.state.active_proposal.proposal_id == "counter"
 
 
 def test_seller_offer_above_buyer_budget_is_public_but_acceptance_is_rejected():
@@ -70,7 +87,7 @@ def test_seller_offer_above_buyer_budget_is_public_but_acceptance_is_rejected():
     assert "1300" not in rejected.message
     assert "1300" not in str(engine.state.public_transcript)
     assert engine.state.outcome is None
-    assert engine.state.current_actor == "buyer"
+    assert engine.state.current_actor == "seller"
     assert len(engine.state.public_transcript) == 1
 
 
@@ -128,5 +145,5 @@ def test_acceptance_rechecks_hard_constraints():
 
     assert result.error_code == "INSUFFICIENT_STOCK"
     assert engine.state.outcome is None
-    assert engine.state.current_actor == "buyer"
+    assert engine.state.current_actor == "seller"
     assert len(engine.state.public_transcript) == 1
