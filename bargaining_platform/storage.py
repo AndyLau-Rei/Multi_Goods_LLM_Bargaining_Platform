@@ -333,7 +333,7 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
         if replay_attempt.validation_result and replay_attempt.validation_result.get("ok"):
             valid_actions.append(event)
 
-        if len(replay_events) and replay_events[-1].event_type == "STATE_TRANSITION":
+        if replay_events[-1].event_type == "STATE_TRANSITION":
             if transitions_seen >= len(transition_events):
                 raise ReplayDivergenceError("Replay produced an unexpected state transition")
             expected = transition_events[transitions_seen]["state_transition_summary"]
@@ -382,8 +382,6 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
         expected_data = _restore_action_numbers(proposal_events[-1]["parsed_action"]["proposal"])
         expected_data.setdefault("decision_summary", "")
         expected_proposal = Proposal.from_dict(expected_data)
-        from .validator import calculate_effective_totals
-
         totals = calculate_effective_totals(expected_proposal, engine.state)
         if not isinstance(totals, dict):
             raise ReplayDivergenceError("Final proposal could not be evaluated")

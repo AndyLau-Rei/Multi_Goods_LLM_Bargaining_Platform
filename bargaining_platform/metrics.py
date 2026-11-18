@@ -241,7 +241,7 @@ def _aggregate(runs: list[dict[str, Any]]) -> dict[str, float | int | None]:
     agreements = [run for run in runs if run["status"] == "AGREEMENT"]
     no_deals = [run for run in runs if run["status"] == "NO_DEAL"]
     utility_values = {
-        name: [_number(run["outcome"].get("utility_metrics", {}).get(name)) for run in agreements]
+        name: [_fraction(run["outcome"].get("utility_metrics", {}).get(name)) for run in agreements]
         for name in ("buyer_utility", "seller_utility", "joint_utility")
     }
     utility_values = {
@@ -257,7 +257,7 @@ def _aggregate(runs: list[dict[str, Any]]) -> dict[str, float | int | None]:
 
     def mean(values: list[Fraction | None]) -> float | None:
         values = [value for value in values if value is not None]
-        return _float(sum(values, Fraction(0)) / len(values)) if values else None
+        return float(sum(values, Fraction(0)) / len(values)) if values else None
 
     result: dict[str, float | int | None] = {
         "run_count": total,
@@ -380,14 +380,6 @@ def _fraction(value: Any) -> Fraction | None:
         return Fraction(Decimal(str(value)))
     except (ArithmeticError, ValueError):
         return None
-
-
-def _number(value: Any) -> Fraction | None:
-    return _fraction(value)
-
-
-def _float(value: Fraction) -> float:
-    return float(value)
 
 
 def _decode(value: str | None) -> Any:

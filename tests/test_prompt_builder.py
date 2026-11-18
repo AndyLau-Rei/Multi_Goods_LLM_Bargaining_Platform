@@ -14,20 +14,16 @@ def _views():
 
 
 @pytest.mark.parametrize(
-    ("role", "persona", "objective", "visible_field", "visible_value", "hidden_values"),
+    ("role", "visible_field", "visible_value", "hidden_values"),
     [
         (
             "seller",
-            "You are an agent who wants to sell products to a buyer.",
-            "maximize seller utility",
             "unit_cost",
             "70",
             ("130", "unit_value"),
         ),
         (
             "buyer",
-            "You are an agent who is interested in buying products from a seller.",
-            "maximize buyer utility",
             "unit_value",
             "130",
             ("70", "unit_cost"),
@@ -35,14 +31,13 @@ def _views():
     ],
 )
 def test_role_prompt_generation(
-    role, persona, objective, visible_field, visible_value, hidden_values
+    role, visible_field, visible_value, hidden_values
 ):
     seller_view, buyer_view = _views()
     prompt = render_prompt(role, seller_view if role == "seller" else buyer_view)
 
-    assert persona in prompt
-    assert role in prompt
-    assert objective in prompt
+    assert f"You are the {role}" in prompt
+    assert f"maximize {role} utility:" in prompt
     assert visible_field in prompt
     assert visible_value in prompt
     for hidden in hidden_values:
@@ -54,12 +49,12 @@ def test_prompt_includes_json_instructions():
 
     prompt = render_prompt("buyer", buyer_view)
 
-    assert "Output ONLY one valid JSON object" in prompt
+    assert "Return exactly one JSON object" in prompt
     for action_type in ("PROPOSE", "COUNTER", "ACCEPT", "WALK_AWAY"):
         assert action_type in prompt
     assert '"action_type"' in prompt
     assert '"proposal_id"' in prompt
-    assert '"proposal": null' in prompt
+    assert "proposal to null" in prompt
 
 
 def test_custom_prompt_template():
@@ -78,4 +73,6 @@ def test_default_prompt_template_remains_available():
 
     prompt = render_prompt("seller", seller_view)
 
-    assert "Apply this section for multi-product negotiation." in prompt
+    assert "package of multiple catalog products" in prompt
+    assert '"discount_if_item_in_bundle"' in prompt
+    assert "minimum_required_quantity" in prompt

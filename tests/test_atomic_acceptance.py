@@ -1,5 +1,7 @@
 from copy import deepcopy
 
+import pytest
+
 from bargaining_platform.engine import NegotiationEngine
 from bargaining_platform.models import Action, Condition, Proposal, Term
 from bargaining_platform.scenario import load_scenario
@@ -27,26 +29,16 @@ def _bundle() -> Proposal:
     )
 
 
-def test_accepting_with_missing_bundle_item_is_rejected():
+@pytest.mark.parametrize("change", ["remove", "inject"])
+def test_accepting_with_modified_bundle_is_rejected(change):
     engine = _engine()
     proposal = _bundle()
     engine.step(Action("PROPOSE", proposal.proposal_id, proposal))
     modified = deepcopy(engine.state.active_proposal)
-    modified.terms = modified.terms[:1]
-
-    result = engine.step(Action("ACCEPT", proposal.proposal_id, modified))
-
-    assert result.error_code == "MUTATION_ON_ACCEPT"
-    assert engine.state.outcome is None
-    assert len(engine.state.active_proposal.terms) == 2
-
-
-def test_accepting_with_injected_term_is_rejected():
-    engine = _engine()
-    proposal = _bundle()
-    engine.step(Action("PROPOSE", proposal.proposal_id, proposal))
-    modified = deepcopy(engine.state.active_proposal)
-    modified.terms.append(Term("purchase", "C", 1, 10, unit="piece"))
+    if change == "remove":
+        modified.terms = modified.terms[:1]
+    else:
+        modified.terms.append(Term("purchase", "C", 1, 10, unit="piece"))
 
     result = engine.step(Action("ACCEPT", proposal.proposal_id, modified))
 

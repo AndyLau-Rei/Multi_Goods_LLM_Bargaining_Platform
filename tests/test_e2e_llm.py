@@ -118,7 +118,7 @@ def test_llm_metadata_logging(tmp_path):
         assert isinstance(event.raw_output, str) and event.raw_output
         assert event.metadata["model_version"] == "mock"
         assert event.metadata["provider"] == "mock"
-        assert event.metadata["prompt_template_id"] == f"{event.actor}_prompt_multi.txt"
+        assert event.metadata["prompt_template_id"] == f"{event.actor}_multi.txt"
         assert event.metadata["prompt_version"]
         assert event.metadata["prompt_hash"] == hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         assert event.metadata["prompt_length"] == len(prompt)

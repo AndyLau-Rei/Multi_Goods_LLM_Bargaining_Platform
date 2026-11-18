@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .metrics import calculate_metrics
 from .models import json_safe
-from .prompt_builder import make_private_view
+from .prompt_builder import default_prompt_path, make_private_view, render_prompt
 from .provider_factory import available_models, create_role_adapters, resolve_models
 from .runner import default_mock_adapters, run_llm_negotiation
 from .scenario import load_scenario
@@ -69,6 +69,23 @@ def models() -> dict[str, Any]:
     return available_models()
 
 
+def _prompt_choices(role: str) -> list[str]:
+    return sorted(
+        path.name
+        for path in default_prompt_path(role).parent.glob(f"{role}_*.txt")
+        if path.is_file()
+    )
+
+
+@app.get("/prompts")
+def prompts() -> dict[str, Any]:
+    return {
+        "seller": _prompt_choices("seller"),
+        "buyer": _prompt_choices("buyer"),
+        "defaults": {role: default_prompt_path(role).name for role in ("seller", "buyer")},
+    }
+
+
 @app.get("/scenarios")
 def scenarios() -> list[dict[str, str]]:
     """List scenario files available to the local viewer."""
@@ -85,6 +102,8 @@ class RunRequest(BaseModel):
     agent_type: Literal["mock", "llm"] = "mock"
     seller_model: str | None = None
     buyer_model: str | None = None
+    seller_prompt: str | None = None
+    buyer_prompt: str | None = None
 
 
 def _db_path() -> Path:
@@ -112,6 +131,8 @@ def _run_in_background(
     db_path: Path,
     seller_model: str | None = None,
     buyer_model: str | None = None,
+    seller_prompt: str | None = None,
+    buyer_prompt: str | None = None,
 ) -> None:
     try:
         model_config = None
@@ -140,6 +161,12 @@ def _run_in_background(
             mock_demo=use_mock,
             progress_callback=publish,
             model_config=model_config,
+            seller_prompt_path=(
+                default_prompt_path("seller").parent / seller_prompt if seller_prompt else None
+            ),
+            buyer_prompt_path=(
+                default_prompt_path("buyer").parent / buyer_prompt if buyer_prompt else None
+            ),
         )
     except Exception:
         _logger.exception("Background negotiation failed for run %s", run_id)
@@ -160,9 +187,21 @@ def start_run(request: RunRequest, background_tasks: BackgroundTasks) -> dict[st
             resolve_models(request.seller_model, request.buyer_model)
         elif request.seller_model is not None or request.buyer_model is not None:
             raise ValueError("MODEL_SELECTION_REQUIRES_LLM")
+        for role in ("seller", "buyer"):
+            selected = getattr(request, f"{role}_prompt")
+            if selected is not None and selected not in _prompt_choices(role):
+                raise ValueError("UNKNOWN_PROMPT")
+            prompt_path = default_prompt_path(role)
+            if selected is not None:
+                prompt_path = prompt_path.parent / selected
+            try:
+                render_prompt(role, {"role": role, "remaining_rounds": scenario["max_rounds"]}, prompt_path)
+            except (OSError, KeyError, ValueError, IndexError, AttributeError) as exc:
+                raise ValueError("INVALID_PROMPT") from exc
     except (OSError, KeyError, ValueError, RuntimeError) as exc:
         detail = str(exc) if isinstance(exc, ValueError) and str(exc) in {
-            "UNKNOWN_MODEL", "MODEL_DISABLED", "MODEL_SELECTION_REQUIRES_LLM"
+            "UNKNOWN_MODEL", "MODEL_DISABLED", "MODEL_SELECTION_REQUIRES_LLM",
+            "UNKNOWN_PROMPT", "INVALID_PROMPT",
         } else "Run could not be started"
         raise HTTPException(status_code=400, detail=detail) from exc
     run_id = f"run-{uuid.uuid4().hex}"
@@ -176,6 +215,8 @@ def start_run(request: RunRequest, background_tasks: BackgroundTasks) -> dict[st
         _db_path(),
         request.seller_model,
         request.buyer_model,
+        request.seller_prompt,
+        request.buyer_prompt,
     )
     return {"run_id": run_id}
 

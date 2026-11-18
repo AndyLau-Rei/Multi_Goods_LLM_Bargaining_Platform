@@ -1,4 +1,6 @@
+import hashlib
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import BackgroundTasks
@@ -144,9 +146,12 @@ def test_viewer_page_and_static_mount():
     page = client.get("/")
     assert page.status_code == 200
     assert "Negotiation Viewer" in page.text
+    assert 'id="seller-prompt"' in page.text
+    assert 'id="buyer-prompt"' in page.text
     static = client.get("/static/app.js")
     assert static.status_code == 200
     assert "renderEvents" in static.text
+    assert 'fetch("/prompts")' in static.text
 
 
 def test_scenarios_endpoint_lists_available_scenarios():
@@ -155,6 +160,70 @@ def test_scenarios_endpoint_lists_available_scenarios():
     scenarios = {scenario["id"]: scenario["name"] for scenario in response.json()}
     assert scenarios["scenarios/single_product.json"] == "single_product"
     assert scenarios["scenarios/shop_bundle.json"] == "shop-v1"
+
+
+def test_prompt_selection_is_role_scoped_and_persisted(tmp_path, monkeypatch):
+    monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
+    client = TestClient(app)
+    choices = client.get("/prompts")
+    assert choices.status_code == 200
+    assert choices.json()["defaults"] == {
+        "seller": "seller_multi.txt", "buyer": "buyer_multi.txt",
+    }
+    assert {"seller_multi.txt", "seller_single.txt"} <= set(choices.json()["seller"])
+    assert {"buyer_multi.txt", "buyer_single.txt"} <= set(choices.json()["buyer"])
+    assert "private_constraints" not in choices.text
+
+    for invalid in ("buyer_single.txt", "../buyer_single.txt", "missing.txt"):
+        response = client.post("/runs", json={
+            "scenario_id": "scenarios/shop_bundle.json",
+            "seller_prompt": invalid,
+        })
+        assert response.status_code == 400
+        assert response.json()["detail"] == "UNKNOWN_PROMPT"
+        assert invalid not in response.text
+
+    response = client.post("/runs", json={
+        "scenario_id": "scenarios/shop_bundle.json",
+        "seller_prompt": "seller_single.txt",
+        "buyer_prompt": "buyer_multi.txt",
+    })
+    assert response.status_code == 202
+    saved = load_run_from_sqlite(response.json()["run_id"], tmp_path / "runs.db")
+    for role, name in (("seller", "seller_single.txt"), ("buyer", "buyer_multi.txt")):
+        events = [event for event in saved["events"] if event["actor"] == role
+                  and event["event_type"] == "ACTION_ATTEMPT"]
+        assert events
+        assert all(event["metadata"]["prompt_template_id"] == name for event in events)
+        assert saved["model_config"]["roles"][role]["prompt_version"] == hashlib.sha256(
+            (Path("prompts") / name).read_bytes()
+        ).hexdigest()
+
+
+def test_invalid_prompt_is_rejected_before_scheduling(tmp_path, monkeypatch):
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    for role in ("seller", "buyer"):
+        (prompt_dir / f"{role}_multi.txt").write_text("{objective}", encoding="utf-8")
+    bad_prompt = prompt_dir / "seller_bad.txt"
+    monkeypatch.setattr(
+        api_module, "default_prompt_path", lambda role: prompt_dir / f"{role}_multi.txt"
+    )
+    client = TestClient(app)
+    assert bad_prompt.name not in client.get("/prompts").json()["seller"]
+
+    for template in ("{missing}", '{"action_type": "ACCEPT"}', "{}"):
+        bad_prompt.write_text(template, encoding="utf-8")
+        assert bad_prompt.name in client.get("/prompts").json()["seller"]
+        with patch.object(BackgroundTasks, "add_task") as schedule:
+            response = client.post("/runs", json={
+                "scenario_id": "scenarios/shop_bundle.json",
+                "seller_prompt": bad_prompt.name,
+            })
+        assert response.status_code == 400
+        assert response.json()["detail"] == "INVALID_PROMPT"
+        assert template not in response.text
+        schedule.assert_not_called()
 
 
 def test_model_whitelist_endpoint_and_run_selection_validation(tmp_path, monkeypatch):

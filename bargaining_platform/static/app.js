@@ -35,6 +35,23 @@ async function loadModels() {
   });
 }
 
+async function loadPrompts() {
+  const response = await fetch("/prompts");
+  if (!response.ok) throw new Error("Prompt list could not be loaded");
+  const data = await response.json();
+  ["seller", "buyer"].forEach((role) => {
+    const select = $(`${role}-prompt`);
+    select.replaceChildren();
+    data[role].forEach((name) => {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      select.appendChild(option);
+    });
+    select.value = data.defaults[role];
+  });
+}
+
 function setMessage(text, isError = false) {
   const message = $("message");
   message.textContent = text || "";
@@ -169,6 +186,8 @@ $("start").addEventListener("click", async () => {
       request.seller_model = $("seller-model").value;
       request.buyer_model = $("buyer-model").value;
     }
+    request.seller_prompt = $("seller-prompt").value;
+    request.buyer_prompt = $("buyer-prompt").value;
     const response = await fetch("/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) });
     if (!response.ok) throw new Error("Could not start negotiation");
     const data = await response.json(); $("run-id").value = data.run_id; await watch(data.run_id);
@@ -177,3 +196,4 @@ $("start").addEventListener("click", async () => {
 $("load").addEventListener("click", () => { const runId = $("run-id").value.trim(); if (runId) watch(runId); });
 loadModels().catch((error) => setMessage(error.message, true));
 loadScenarios().catch((error) => setMessage(error.message, true));
+loadPrompts().catch((error) => setMessage(error.message, true));

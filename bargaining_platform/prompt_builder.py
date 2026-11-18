@@ -11,6 +11,10 @@ _PUBLIC_CATALOG_FIELDS = ("id", "type", "unit", "seller_stock")
 _PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 
+def default_prompt_path(role: str) -> Path:
+    return _PROMPT_DIR / f"{role}_multi.txt"
+
+
 def _prompt_json(value: object) -> str:
     return json.dumps(json_safe(deepcopy(value)), indent=2, sort_keys=True)
 
@@ -72,9 +76,7 @@ def render_prompt(
         "proposal_id": "current-proposal-id",
         "proposal": None,
     }
-    selected_template = Path(template_path) if template_path is not None else (
-        _PROMPT_DIR / f"{role}_prompt_multi.txt"
-    )
+    selected_template = Path(template_path) if template_path is not None else default_prompt_path(role)
     if not selected_template.is_file():
         raise FileNotFoundError(f"Prompt template not found: {selected_template}")
     template = selected_template.read_text(encoding="utf-8")

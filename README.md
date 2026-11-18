@@ -48,16 +48,23 @@ python -m bargaining_platform.cli run --scenario scenarios/shop_bundle.json --ag
 `LLM_API_KEY` is the optional shared fallback when a role-specific key is unset.
 The whitelist currently includes GPT, Gemini, DeepSeek, Qwen, Kimi/Moonshot, and
 GLM/Zhipu aliases. Keys are read from the process environment and are not stored.
-The web UI loads enabled aliases from `GET /models`; `/runs` accepts the selected
-`seller_model` and `buyer_model` aliases and rejects other fields.
+The web UI loads enabled aliases from `GET /models` and role-specific prompt
+filenames from `GET /prompts`. For each run, `/runs` accepts independent
+`seller_model`, `buyer_model`, `seller_prompt`, and `buyer_prompt` selections.
+Prompt selections must be listed files in `prompts/`; the default for each role
+is `{role}_multi.txt`. Place additional role-prefixed `.txt` templates there to
+make them available in the web UI. Only filenames, never prompt contents, are listed.
 
 Role-specific prompt templates can be selected at runtime:
 
 ```powershell
 python -m bargaining_platform.cli run --scenario scenarios/shop_bundle.json --agent mock `
-  --seller-prompt prompts/seller_prompt_multi.txt `
-  --buyer-prompt prompts/buyer_prompt_multi.txt
+  --seller-prompt prompts/seller_single.txt `
+  --buyer-prompt prompts/buyer_single.txt
 ```
+
+CLI prompt options continue to accept explicit file paths, including older
+`*_prompt_*.txt` templates.
 
 ### Run an experiment matrix
 

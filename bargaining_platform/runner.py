@@ -10,7 +10,7 @@ from typing import Callable
 from .engine import NegotiationEngine
 from .model_adapter import BaseLLMAdapter, GenerationResult, MockLLMAdapter
 from .models import Action, GameState, ValidationResult
-from .prompt_builder import make_private_view, render_prompt, render_public_update
+from .prompt_builder import default_prompt_path, make_private_view, render_prompt, render_public_update
 from .storage import DEFAULT_DB_PATH, save_run_to_sqlite
 from .validator import parse_action
 
@@ -21,7 +21,7 @@ class LLMAgent:
     def __init__(self, role: str, adapter: BaseLLMAdapter, prompt_path: str | Path | None = None):
         self.role = role
         self.adapter = adapter
-        self.prompt_path = prompt_path
+        self.prompt_path = prompt_path if prompt_path is not None else default_prompt_path(role)
         self.messages = []
         self.transcript_count = 0
 
@@ -100,7 +100,7 @@ def run_llm_negotiation(
         role_config = persisted_model_config["roles"].setdefault(
             role, _adapter_model_config(agent.adapter)
         )
-        role_config["prompt_version"] = _prompt_version(role, agent.prompt_path)
+        role_config["prompt_version"] = _prompt_version(agent.prompt_path)
         agent.model_metadata = deepcopy(role_config)
     while engine.state.outcome is None:
         role = engine.state.current_actor
@@ -114,10 +114,7 @@ def run_llm_negotiation(
             raw_output=generated.text,
             metadata={
                 "role": role,
-                "prompt_template_id": (
-                    Path(agent.prompt_path).name if agent.prompt_path is not None
-                    else f"{role}_prompt_multi.txt"
-                ),
+                "prompt_template_id": Path(agent.prompt_path).name,
                 **{
                     key: agent.model_metadata[key]
                     for key in ("public_alias", "provider", "model_id", "prompt_version", "adapter_version")
@@ -175,11 +172,8 @@ def _adapter_model_config(adapter: BaseLLMAdapter) -> dict:
     }
 
 
-def _prompt_version(role: str, prompt_path: str | Path | None) -> str:
-    path = Path(prompt_path) if prompt_path is not None else (
-        Path(__file__).resolve().parent.parent / "prompts" / f"{role}_prompt_multi.txt"
-    )
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _prompt_version(prompt_path: str | Path) -> str:
+    return hashlib.sha256(Path(prompt_path).read_bytes()).hexdigest()
 
 
 def default_mock_adapters() -> dict[str, MockLLMAdapter]:
