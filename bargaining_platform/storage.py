@@ -10,7 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from .models import Action, Outcome, Proposal, json_safe
+from .models import Action, Outcome, Proposal, ValidationResult, json_safe
 
 
 DEFAULT_DB_PATH = Path("results/runs.db")
@@ -267,6 +267,7 @@ class ReplayDivergenceError(RuntimeError):
 def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
     """Replay persisted actions in a fresh engine and verify deterministic results."""
     from .engine import NegotiationEngine
+    from .validator import calculate_effective_totals, parse_action, validate_action
 
     run = load_run_from_sqlite(run_id, db_path)
     engine = NegotiationEngine(run["scenario"])
@@ -286,7 +287,36 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
                 proposal = action_data.get("proposal")
                 if proposal is not None:
                     proposal.setdefault("decision_summary", "")
-                engine.step(Action.from_dict(action_data), role=event["actor"])
+                action = Action.from_dict(action_data)
+                raw_action = (
+                    parse_action(event["raw_output"], event["actor"])
+                    if isinstance(event["raw_output"], str) else None
+                )
+                legacy_budget_rejection = (
+                    event["validation_result"] == {
+                        "ok": False,
+                        "error_code": "BUDGET_EXCEEDED",
+                        "message": "The proposed total exceeds the allowed budget",
+                    }
+                    and action.action_type in {"PROPOSE", "COUNTER"}
+                    and isinstance(raw_action, Action)
+                    and validate_action(event["actor"], action, engine.state).ok
+                )
+                if legacy_budget_rejection:
+                    raw_action_data = raw_action.to_dict()
+                    raw_action_data["proposal"].pop("decision_summary", None)
+                    stored_action = action.to_dict()
+                    stored_action["proposal"].pop("decision_summary", None)
+                    legacy_budget_rejection = (
+                        raw_action_data == stored_action
+                        and calculate_effective_totals(action.proposal, engine.state)["effective_total"]
+                        > Decimal(str(engine.state.private_profiles["buyer"]["budget"]))
+                    )
+                engine.step(
+                    ValidationResult(False, "BUDGET_EXCEEDED", "The proposed total exceeds the allowed budget")
+                    if legacy_budget_rejection else action,
+                    role=event["actor"],
+                )
         except Exception as exc:
             raise ReplayDivergenceError(
                 f"Replay failed at event {event['event_id']}"

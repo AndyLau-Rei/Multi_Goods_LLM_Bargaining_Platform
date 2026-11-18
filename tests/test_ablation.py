@@ -1,8 +1,7 @@
-from bargaining_platform.cli import main
 import json
-
 import pytest
 
+from bargaining_platform.cli import main
 from bargaining_platform.experiments import ExperimentRunner, compare_experiment_configs
 
 

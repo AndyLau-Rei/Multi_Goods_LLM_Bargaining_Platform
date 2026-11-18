@@ -88,3 +88,12 @@ def render_prompt(
         action_schema=_prompt_json(action_schema),
         example=_prompt_json(example),
     )
+
+
+def render_public_update(private_view: dict, transcript_start: int) -> str:
+    """Render only public state added since this role last acted."""
+    return _prompt_json({
+        "remaining_rounds": private_view["remaining_rounds"],
+        "active_proposal": private_view["active_proposal"],
+        "new_public_actions": private_view["public_transcript"][transcript_start:],
+    })

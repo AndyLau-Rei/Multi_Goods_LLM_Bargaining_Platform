@@ -1,13 +1,15 @@
 import json
 import sqlite3
+from dataclasses import replace
 
 import pytest
 
 from bargaining_platform.engine import NegotiationEngine
-from bargaining_platform.models import Action, Condition, Proposal, Term
+from bargaining_platform.models import Action, Condition, Outcome, Proposal, Term, ValidationResult
 from bargaining_platform.scenario import load_scenario
 from bargaining_platform.storage import (
     ReplayDivergenceError,
+    load_run_from_sqlite,
     replay_run,
     save_run_to_sqlite,
 )
@@ -49,6 +51,18 @@ def test_deterministic_replay_success(tmp_path):
     assert replayed.active_proposal.effective_prices == {"A": 100, "B": 60}
 
 
+def test_replay_reads_existing_prompt_metadata(tmp_path):
+    database, original = _run(tmp_path)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE events SET metadata_json = ? WHERE run_id = ? AND event_id = 1",
+            (json.dumps({"prompt": "legacy private prompt"}), "run-1"),
+        )
+
+    assert load_run_from_sqlite("run-1", database)["events"][0]["metadata"]["prompt"] == "legacy private prompt"
+    assert replay_run("run-1", database).outcome.to_dict() == original.state.outcome.to_dict()
+
+
 def test_replay_detects_tampering(tmp_path):
     database, _ = _run(tmp_path)
     with sqlite3.connect(database) as connection:
@@ -67,3 +81,42 @@ def test_replay_detects_tampering(tmp_path):
 
     with pytest.raises(ReplayDivergenceError):
         replay_run("run-1", database)
+
+
+def test_replay_legacy_budget_rejection_checks_raw_action(tmp_path):
+    scenario = load_scenario("scenarios/single_product.json")
+    engine = NegotiationEngine(scenario)
+    proposal = Proposal(
+        "legacy-offer", "all_or_nothing",
+        [Term("purchase", "A", 1, 1500, unit="piece")],
+        [], "", {"A": 1500}, {"A": 1500},
+    )
+    action = Action("PROPOSE", proposal.proposal_id, proposal, actor="seller")
+    rejection = ValidationResult(
+        False, "BUDGET_EXCEEDED", "The proposed total exceeds the allowed budget"
+    ).to_dict()
+    raw_action = action.to_dict()
+    raw_action.pop("actor")
+    raw = json.dumps(raw_action)
+    attempt = engine.event_logger.append(
+        "ACTION_ATTEMPT", "seller", raw_output=raw,
+        parsed_action=action.to_dict(), validation_result=rejection,
+    )
+    terminal = engine.event_logger.append(
+        "STATE_TRANSITION", "seller",
+        state_transition_summary="Game ended: invalid action retry exhausted",
+    )
+    database = tmp_path / "legacy.db"
+    save_run_to_sqlite(
+        "legacy", scenario, Outcome("INVALID_ACTION"),
+        (attempt, replace(attempt, event_id=2), replace(terminal, event_id=3)), database,
+    )
+
+    assert replay_run("legacy", database).outcome.status == "INVALID_ACTION"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE events SET raw_output_json = ? WHERE run_id = ? AND event_id = 1",
+            (json.dumps(raw.replace("1500", "1200")), "legacy"),
+        )
+    with pytest.raises(ReplayDivergenceError):
+        replay_run("legacy", database)

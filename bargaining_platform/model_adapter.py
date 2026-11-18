@@ -29,7 +29,7 @@ class BaseLLMAdapter(ABC):
     """Interface consumed by future agent call flow code."""
 
     @abstractmethod
-    def generate(self, prompt: str, action_schema: dict) -> GenerationResult:
+    def generate(self, prompt: str | list[dict[str, str]], action_schema: dict) -> GenerationResult:
         """Generate raw text; parsing and validation belong to later tickets."""
 
 
@@ -40,7 +40,7 @@ class MockLLMAdapter(BaseLLMAdapter):
         self._responses = deque(responses)
         self.model_version = model_version
 
-    def generate(self, prompt: str, action_schema: dict) -> GenerationResult:
+    def generate(self, prompt: str | list[dict[str, str]], action_schema: dict) -> GenerationResult:
         started = time.perf_counter()
         if not self._responses:
             raise AdapterError("Mock response queue is empty")
@@ -51,7 +51,7 @@ class MockLLMAdapter(BaseLLMAdapter):
             text=text,
             metadata=_metadata(
                 self.model_version,
-                prompt,
+                _prompt_text(prompt),
                 text,
                 (time.perf_counter() - started) * 1000,
             ),
@@ -84,12 +84,12 @@ class OpenAIAdapter(BaseLLMAdapter):
         self.max_api_retries = max_api_retries
         self.backoff_seconds = backoff_seconds
 
-    def generate(self, prompt: str, action_schema: dict) -> GenerationResult:
+    def generate(self, prompt: str | list[dict[str, str]], action_schema: dict) -> GenerationResult:
         if not self.api_key:
             raise AdapterError("LLM_API_KEY is not configured")
         payload = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": _messages(prompt),
             "response_format": (
                 {
                     "type": "json_schema",
@@ -116,7 +116,7 @@ class OpenAIAdapter(BaseLLMAdapter):
         usage = response.get("usage") or {}
         metadata = _metadata(
             response.get("model", self.model),
-            prompt,
+            _prompt_text(prompt),
             text,
             (time.perf_counter() - started) * 1000,
             prompt_tokens=usage.get("prompt_tokens"),
@@ -148,15 +148,25 @@ class GeminiAdapter(BaseLLMAdapter):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-    def generate(self, prompt: str, action_schema: dict) -> GenerationResult:
+    def generate(self, prompt: str | list[dict[str, str]], action_schema: dict) -> GenerationResult:
         endpoint = f"{self.base_url}/models/{self.model}:generateContent"
+        messages = _messages(prompt)
         payload = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "contents": [
+                {
+                    "role": "model" if message["role"] == "assistant" else "user",
+                    "parts": [{"text": message["content"]}],
+                }
+                for message in messages
+                if message["role"] != "system"
+            ],
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "responseJsonSchema": action_schema,
             },
         }
+        if messages[0]["role"] == "system":
+            payload["systemInstruction"] = {"parts": [{"text": messages[0]["content"]}]}
         started = time.perf_counter()
         request = Request(
             endpoint,
@@ -185,7 +195,7 @@ class GeminiAdapter(BaseLLMAdapter):
         usage = result.get("usageMetadata") or {}
         metadata = _metadata(
             self.model,
-            prompt,
+            _prompt_text(prompt),
             text,
             (time.perf_counter() - started) * 1000,
             prompt_tokens=usage.get("promptTokenCount"),
@@ -233,6 +243,16 @@ def _metadata(
         else _estimate_tokens(text),
         "latency_ms": max(0.0, latency_ms),
     }
+
+
+def _messages(prompt: str | list[dict[str, str]]) -> list[dict[str, str]]:
+    return [{"role": "user", "content": prompt}] if isinstance(prompt, str) else prompt
+
+
+def _prompt_text(prompt: str | list[dict[str, str]]) -> str:
+    if isinstance(prompt, str):
+        return prompt
+    return "\n\n".join(f"{message['role']}: {message['content']}" for message in prompt)
 
 
 def _estimate_tokens(text: str) -> int:

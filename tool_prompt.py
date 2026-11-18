@@ -18,8 +18,8 @@ def main() -> None:
 
     scenario = load_scenario(args.scenario)
     engine = NegotiationEngine(scenario)
-    seller_view = make_private_view("seller", engine.state)
-    print(render_prompt("seller", seller_view))
+    seller_view = make_private_view("buyer", engine.state)
+    print(render_prompt("buyer", seller_view))
 
 
 if __name__ == "__main__":

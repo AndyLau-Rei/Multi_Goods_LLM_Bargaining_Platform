@@ -69,6 +69,16 @@ def models() -> dict[str, Any]:
     return available_models()
 
 
+@app.get("/scenarios")
+def scenarios() -> list[dict[str, str]]:
+    """List scenario files available to the local viewer."""
+    directory = Path("scenarios")
+    return [
+        {"id": f"scenarios/{path.name}", "name": load_scenario(str(path))["scenario_id"]}
+        for path in sorted(directory.glob("*.json"))
+    ]
+
+
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scenario_id: str

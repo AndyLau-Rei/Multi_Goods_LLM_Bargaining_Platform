@@ -2,6 +2,7 @@ import pytest
 
 from bargaining_platform.engine import NegotiationEngine
 from bargaining_platform.models import Action, Proposal, Term
+from bargaining_platform.prompt_builder import make_private_view, render_prompt
 from bargaining_platform.scenario import load_scenario
 
 
@@ -47,18 +48,53 @@ def test_rejects_price_below_floor_without_leaking_floor():
     assert engine.state.active_proposal is None
 
 
-def test_rejects_total_above_budget_without_leaking_budget():
-    engine = _engine()
-    offer = _proposal("offer-1")
-    offer.terms[0] = Term("purchase", "A", 2, 120, unit="piece")
-    offer.original_prices["A"] = 120
-    offer.effective_prices["A"] = 120
+def test_seller_offer_above_buyer_budget_is_public_but_acceptance_is_rejected():
+    engine = NegotiationEngine(load_scenario("scenarios/single_product.json"))
+    offer = Proposal(
+        "offer-1500", "all_or_nothing",
+        [Term("purchase", "A", 1, 1500, unit="piece")],
+        [], "Private seller note", {"A": 1500}, {"A": 1500},
+    )
 
-    result = engine.step(Action("PROPOSE", offer.proposal_id, offer))
+    proposed = engine.step(Action("PROPOSE", offer.proposal_id, offer))
 
-    assert result.error_code == "BUDGET_EXCEEDED"
-    assert "200" not in result.message
-    assert engine.state.active_proposal is None
+    assert proposed is engine.state
+    assert engine.state.current_actor == "buyer"
+    assert engine.state.active_proposal.proposal_id == offer.proposal_id
+    assert engine.state.public_transcript[0]["proposal"]["terms"][0]["unit_price"] == 1500
+    assert "1300" not in render_prompt("seller", make_private_view("seller", engine.state))
+
+    rejected = engine.step(Action("ACCEPT", offer.proposal_id))
+
+    assert rejected.error_code == "BUDGET_EXCEEDED"
+    assert "1300" not in rejected.message
+    assert "1300" not in str(engine.state.public_transcript)
+    assert engine.state.outcome is None
+    assert engine.state.current_actor == "buyer"
+    assert len(engine.state.public_transcript) == 1
+
+
+def test_seller_acceptance_does_not_reveal_buyer_budget():
+    engine = NegotiationEngine(load_scenario("scenarios/single_product.json"))
+    first = Proposal(
+        "offer-1", "all_or_nothing",
+        [Term("purchase", "A", 1, 1200, unit="piece")],
+        [], "", {"A": 1200}, {"A": 1200},
+    )
+    counter = Proposal(
+        "offer-2", "all_or_nothing",
+        [Term("purchase", "A", 1, 1500, unit="piece")],
+        [], "", {"A": 1500}, {"A": 1500},
+    )
+    engine.step(Action("PROPOSE", first.proposal_id, first))
+    engine.step(Action("COUNTER", first.proposal_id, counter))
+
+    rejected = engine.step(Action("ACCEPT", counter.proposal_id))
+
+    assert rejected.error_code == "ACCEPTANCE_REQUIREMENTS_NOT_MET"
+    assert "budget" not in rejected.message.lower()
+    assert "1300" not in rejected.message
+    assert engine.state.outcome is None
 
 
 def test_rejects_unowned_catalog_item():

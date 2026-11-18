@@ -1,8 +1,9 @@
 import json
+
 import pytest
 
-from bargaining_platform.models import Action, ValidationResult
 from bargaining_platform.engine import NegotiationEngine
+from bargaining_platform.models import Action, ValidationResult
 from bargaining_platform.scenario import load_scenario
 from bargaining_platform.validator import parse_action
 

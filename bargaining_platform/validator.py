@@ -185,7 +185,13 @@ def validate_action(role: str, action: Action, state: GameState) -> ValidationRe
                 False, "MUTATION_ON_ACCEPT",
                 "ACCEPT must reference only the current proposal ID",
             )
-        return _validate_hard_constraints(active, state)
+        result = _validate_hard_constraints(active, state, check_budget=True)
+        if role == "seller" and result.error_code == "BUDGET_EXCEEDED":
+            return ValidationResult(
+                False, "ACCEPTANCE_REQUIREMENTS_NOT_MET",
+                "The proposal does not meet acceptance requirements",
+            )
+        return result
 
     proposal = action.proposal
     if (
@@ -256,6 +262,7 @@ def _validate_hard_constraints(
     state: GameState,
     totals: dict | None = None,
     quantities: dict[str, int] | None = None,
+    check_budget: bool = False,
 ) -> ValidationResult:
     catalog = {entry["id"]: entry for entry in state.catalog}
     if quantities is None:
@@ -299,7 +306,7 @@ def _validate_hard_constraints(
         return ValidationResult(
             False, "QUANTITY_LIMIT_EXCEEDED", "The requested quantity is not permitted"
         )
-    if totals["effective_total"] > Decimal(str(state.private_profiles["buyer"]["budget"])):
+    if check_budget and totals["effective_total"] > Decimal(str(state.private_profiles["buyer"]["budget"])):
         return ValidationResult(
             False, "BUDGET_EXCEEDED", "The proposed total exceeds the allowed budget"
         )

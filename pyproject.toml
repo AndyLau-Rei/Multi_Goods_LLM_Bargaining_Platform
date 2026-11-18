@@ -14,7 +14,7 @@ dev = ["pytest", "fastapi", "uvicorn", "httpx"]
 include = ["bargaining_platform*"]
 
 [tool.setuptools.package-data]
-bargaining_platform = ["static/*"]
+bargaining_platform = ["static/*", "model_whitelist.v1.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

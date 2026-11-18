@@ -33,12 +33,23 @@ Run the deterministic offline demo and save it to `results/runs.db`:
 python -m bargaining_platform.cli run --scenario scenarios/shop_bundle.json --agent mock
 ```
 
-Use an LLM adapter when `LLM_API_KEY` is set; otherwise the runner falls back to the mock adapter:
+LLM runs use model aliases from the packaged whitelist at
+`bargaining_platform/model_whitelist.v1.json`. Set separate role keys, or a shared
+fallback key; when either role has no key, the run uses the existing mock fallback:
 
 ```powershell
-$env:LLM_API_KEY = "your-api-key"
-python -m bargaining_platform.cli run --scenario scenarios/shop_bundle.json --agent llm
+$env:SELLER_LLM_API_KEY = "seller-provider-key"
+$env:BUYER_LLM_API_KEY = "buyer-provider-key"
+python -m bargaining_platform.cli run --scenario scenarios/shop_bundle.json --agent llm `
+  --seller-model gpt-4o-mini `
+  --buyer-model gemini-2.0-flash
 ```
+
+`LLM_API_KEY` is the optional shared fallback when a role-specific key is unset.
+The whitelist currently includes GPT, Gemini, DeepSeek, Qwen, Kimi/Moonshot, and
+GLM/Zhipu aliases. Keys are read from the process environment and are not stored.
+The web UI loads enabled aliases from `GET /models`; `/runs` accepts the selected
+`seller_model` and `buyer_model` aliases and rejects other fields.
 
 Role-specific prompt templates can be selected at runtime:
 
@@ -57,6 +68,9 @@ python -m bargaining_platform.cli experiment `
 ```
 
 An experiment config contains `repetitions`, `scenario_path`, an optional `agent_type`, and a `variations` list. Each variation receives a stable condition ID and each repetition receives its own run ID.
+For LLM experiments, set `seller_model` and `buyer_model` at the top level or on
+each variation, or pass the equivalent `--seller-model` and `--buyer-model` CLI
+options. Model selections are part of the condition identity.
 
 ### Compare baseline and treatment
 

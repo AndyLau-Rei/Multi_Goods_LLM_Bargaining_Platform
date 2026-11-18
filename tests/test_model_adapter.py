@@ -1,8 +1,12 @@
+import json
+
 from bargaining_platform.model_adapter import (
     BaseLLMAdapter,
+    GeminiAdapter,
     GenerationResult,
-    OpenAIAdapter,
     MockLLMAdapter,
+    OpenAIAdapter,
+    openai_adapters,
 )
 
 
@@ -18,6 +22,96 @@ def test_mock_adapter_returns_queued_raw_output_and_metadata():
     assert result.metadata["prompt_tokens"] == 1
     assert result.metadata["completion_tokens"] == 1
     assert result.metadata["latency_ms"] >= 0
+
+
+def test_openai_adapters_are_fresh_per_role(monkeypatch):
+    instances = []
+
+    def make_adapter():
+        adapter = object()
+        instances.append(adapter)
+        return adapter
+
+    monkeypatch.setattr("bargaining_platform.model_adapter.OpenAIAdapter", make_adapter)
+
+    adapters = openai_adapters()
+
+    assert set(adapters) == {"seller", "buyer"}
+    assert adapters["seller"] is not adapters["buyer"]
+    assert instances == [adapters["seller"], adapters["buyer"]]
+
+
+def test_gemini_adapter_uses_header_key_and_parses_json_response(monkeypatch):
+    from io import BytesIO
+
+    calls = []
+
+    class Response(BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    def fake_urlopen(request, timeout):
+        calls.append(request)
+        return Response(json.dumps({
+            "candidates": [{"content": {"parts": [{"text": '{"action_type":"WALK_AWAY"}'}]}}],
+            "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 2},
+        }).encode())
+
+    monkeypatch.setattr("bargaining_platform.model_adapter.urlopen", fake_urlopen)
+    schema = {"type": "object", "required": ["action_type"]}
+    result = GeminiAdapter("gemini-test", "private-key", "https://gemini.test/v1beta").generate(
+        "prompt", schema
+    )
+
+    headers = {key.lower(): value for key, value in calls[0].headers.items()}
+    request_payload = json.loads(calls[0].data)
+    assert calls[0].full_url == "https://gemini.test/v1beta/models/gemini-test:generateContent"
+    assert headers["x-goog-api-key"] == "private-key"
+    assert "private-key" not in calls[0].full_url
+    assert request_payload["generationConfig"]["responseJsonSchema"] == schema
+    assert result.text == '{"action_type":"WALK_AWAY"}'
+    assert result.metadata["prompt_tokens"] == 8
+    assert result.metadata["completion_tokens"] == 2
+
+
+def test_gemini_adapter_maps_role_history_to_system_instruction_and_contents(monkeypatch):
+    from io import BytesIO
+
+    calls = []
+
+    class Response(BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    def fake_urlopen(request, timeout):
+        calls.append(json.loads(request.data))
+        return Response(json.dumps({
+            "candidates": [{"content": {"parts": [{"text": '{"action_type":"ACCEPT"}'}]}}],
+        }).encode())
+
+    monkeypatch.setattr("bargaining_platform.model_adapter.urlopen", fake_urlopen)
+    GeminiAdapter("gemini-test", "private-key", "https://gemini.test/v1beta").generate(
+        [
+            {"role": "system", "content": "stable role instructions"},
+            {"role": "user", "content": "first public offer"},
+            {"role": "assistant", "content": "my prior action"},
+            {"role": "user", "content": "new public offer"},
+        ],
+        {"type": "object"},
+    )
+
+    assert calls[0]["systemInstruction"]["parts"][0]["text"] == "stable role instructions"
+    assert calls[0]["contents"] == [
+        {"role": "user", "parts": [{"text": "first public offer"}]},
+        {"role": "model", "parts": [{"text": "my prior action"}]},
+        {"role": "user", "parts": [{"text": "new public offer"}]},
+    ]
 
 
 class _RetryingAdapter(OpenAIAdapter):

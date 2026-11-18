@@ -1,5 +1,8 @@
 import json
+import sqlite3
 from decimal import Decimal
+
+import pytest
 
 from bargaining_platform.engine import NegotiationEngine
 from bargaining_platform.models import Action, Condition, Proposal, Term, ValidationResult
@@ -121,6 +124,35 @@ def test_sqlite_persistence(tmp_path):
     assert len(saved["events"]) == len(engine.event_logger.events)
     assert [event["event_id"] for event in saved["events"]] == [1, 2, 3, 4]
     assert saved["events"][0]["parsed_action"]["proposal"]["terms"][0]["item_id"] == "A"
+
+
+def test_model_config_column_migrates_existing_runs_table(tmp_path):
+    database = tmp_path / "old.db"
+    with sqlite3.connect(database) as connection:
+        connection.executescript("""
+            CREATE TABLE runs (
+                run_id TEXT PRIMARY KEY, scenario_id TEXT NOT NULL,
+                max_rounds INTEGER NOT NULL, outcome_status TEXT,
+                created_at TEXT NOT NULL, scenario_json TEXT NOT NULL,
+                outcome_json TEXT
+            );
+            CREATE TABLE events (
+                run_id TEXT NOT NULL, event_id INTEGER NOT NULL,
+                timestamp TEXT NOT NULL, event_type TEXT NOT NULL, actor TEXT,
+                raw_output_json TEXT, parsed_action_json TEXT,
+                validation_result_json TEXT, state_transition_summary TEXT,
+                private_decision_summary TEXT,
+                PRIMARY KEY (run_id, event_id)
+            );
+        """)
+
+    with pytest.raises(KeyError):
+        load_run_from_sqlite("not-present", database)
+    with sqlite3.connect(database) as connection:
+        run_columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
+        event_columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+    assert {"condition_id", "model_config_json"} <= run_columns
+    assert "metadata_json" in event_columns
 
 
 def test_jsonl_export_preserves_details(tmp_path):

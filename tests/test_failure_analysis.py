@@ -112,6 +112,7 @@ def test_hard_constraint_errors_are_categorized(tmp_path):
     engine = NegotiationEngine(scenario)
     proposal = _proposal("budget")
     engine.step(Action("PROPOSE", proposal.proposal_id, proposal))
+    engine.step(Action("ACCEPT", proposal.proposal_id))
     save_run_to_sqlite(
         "budget", scenario, engine.state.outcome,
         engine.event_logger.events, tmp_path / "runs.db",

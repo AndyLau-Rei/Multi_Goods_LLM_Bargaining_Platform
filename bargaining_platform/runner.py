@@ -10,26 +10,56 @@ from typing import Callable
 from .engine import NegotiationEngine
 from .model_adapter import BaseLLMAdapter, GenerationResult, MockLLMAdapter
 from .models import Action, GameState, ValidationResult
-from .prompt_builder import make_private_view, render_prompt
+from .prompt_builder import make_private_view, render_prompt, render_public_update
 from .storage import DEFAULT_DB_PATH, save_run_to_sqlite
 from .validator import parse_action
 
 
 class LLMAgent:
-    """A role-scoped model client with no persistent conversation state."""
+    """A role-scoped model client with private turn history."""
 
     def __init__(self, role: str, adapter: BaseLLMAdapter, prompt_path: str | Path | None = None):
         self.role = role
         self.adapter = adapter
         self.prompt_path = prompt_path
+        self.messages = []
+        self.transcript_count = 0
 
     def decide(
         self, state: GameState, action_schema: dict
     ) -> tuple[Action | ValidationResult, str, GenerationResult]:
         view = make_private_view(self.role, state)
-        prompt = render_prompt(self.role, view, template_path=self.prompt_path)
-        generated = self.adapter.generate(prompt, action_schema)
-        return parse_action(generated.text, self.role), prompt, generated
+        if not self.messages:
+            background_view = {
+                **view,
+                "active_proposal": None,
+                "public_transcript": [],
+                "remaining_rounds": state.max_rounds,
+            }
+            background = render_prompt(
+                self.role, background_view, template_path=self.prompt_path
+            )
+            self.messages.append({
+                "role": "system",
+                "content": background + "\n\nThe latest user message is the current public state.",
+            })
+        self.messages.append({
+            "role": "user",
+            "content": render_public_update(view, self.transcript_count),
+        })
+        logged_prompt = "\n\n".join(
+            f"{message['role']}: {message['content']}" for message in self.messages
+        )
+        generated = self.adapter.generate(self.messages, action_schema)
+        self.messages.append({"role": "assistant", "content": generated.text})
+        self.transcript_count = len(view["public_transcript"])
+        return parse_action(generated.text, self.role), logged_prompt, generated
+
+    def report_validation(self, result: ValidationResult) -> None:
+        self.messages.append({
+            "role": "user",
+            "content": f"Your previous action was rejected: {result.error_code}. {result.message}",
+        })
 
 
 def run_llm_negotiation(
@@ -78,12 +108,32 @@ def run_llm_negotiation(
         parsed, prompt, generated = agent.decide(engine.state, _action_schema())
         event_count = len(engine.event_logger.events)
         transcript_count = len(engine.state.public_transcript)
-        engine.step(
+        result = engine.step(
             parsed,
             role=role,
             raw_output=generated.text,
-            metadata={"role": role, **agent.model_metadata, "prompt": prompt, **generated.metadata},
+            metadata={
+                "role": role,
+                "prompt_template_id": (
+                    Path(agent.prompt_path).name if agent.prompt_path is not None
+                    else f"{role}_prompt_multi.txt"
+                ),
+                **{
+                    key: agent.model_metadata[key]
+                    for key in ("public_alias", "provider", "model_id", "prompt_version", "adapter_version")
+                    if key in agent.model_metadata
+                },
+                "prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                "prompt_length": len(prompt),
+                **{
+                    key: generated.metadata[key]
+                    for key in ("model_version", "prompt_tokens", "completion_tokens", "latency_ms", "api_attempts")
+                    if key in generated.metadata
+                },
+            },
         )
+        if isinstance(result, ValidationResult) and not result.ok:
+            agent.report_validation(result)
         if progress_callback is not None:
             public_actions = iter(engine.state.public_transcript[transcript_count:])
             public_events = []

@@ -9,6 +9,7 @@ from bargaining_platform.api import _public_action, app
 from bargaining_platform.model_adapter import MockLLMAdapter
 from bargaining_platform.runner import run_llm_negotiation
 from bargaining_platform.scenario import load_scenario
+from bargaining_platform.storage import load_run_from_sqlite
 
 
 def test_start_run_and_get_status(tmp_path, monkeypatch):
@@ -146,6 +147,59 @@ def test_viewer_page_and_static_mount():
     static = client.get("/static/app.js")
     assert static.status_code == 200
     assert "renderEvents" in static.text
+
+
+def test_scenarios_endpoint_lists_available_scenarios():
+    response = TestClient(app).get("/scenarios")
+    assert response.status_code == 200
+    scenarios = {scenario["id"]: scenario["name"] for scenario in response.json()}
+    assert scenarios["scenarios/single_product.json"] == "single_product"
+    assert scenarios["scenarios/shop_bundle.json"] == "shop-v1"
+
+
+def test_model_whitelist_endpoint_and_run_selection_validation(tmp_path, monkeypatch):
+    monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("SELLER_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("BUYER_LLM_API_KEY", raising=False)
+    client = TestClient(app)
+
+    response = client.get("/models")
+    assert response.status_code == 200
+    assert {item["provider"] for item in response.json()["models"]} == {
+        "openai", "gemini", "deepseek", "qwen", "moonshot", "zhipu",
+    }
+    assert "base_url" not in json.dumps(response.json())
+    assert "api_key" not in json.dumps(response.json()).lower()
+
+    unknown = client.post("/runs", json={
+        "scenario_id": "scenarios/shop_bundle.json",
+        "agent_type": "llm",
+        "seller_model": "unlisted-model",
+    })
+    assert unknown.status_code == 400
+    assert unknown.json()["detail"] == "UNKNOWN_MODEL"
+    assert "unlisted-model" not in unknown.text
+
+    with_key = client.post("/runs", json={
+        "scenario_id": "scenarios/shop_bundle.json",
+        "agent_type": "llm",
+        "api_key": "must-not-be-accepted",
+    })
+    assert with_key.status_code == 422
+    assert "must-not-be-accepted" not in with_key.text
+
+    fallback = client.post("/runs", json={
+        "scenario_id": "scenarios/shop_bundle.json",
+        "agent_type": "llm",
+        "seller_model": "gpt-4o-mini",
+        "buyer_model": "gemini-2.0-flash",
+    })
+    assert fallback.status_code == 202
+    saved = load_run_from_sqlite(fallback.json()["run_id"], tmp_path / "runs.db")
+    assert saved["model_config"]["execution"] == "mock_fallback"
+    assert saved["model_config"]["roles"]["seller"]["requested_model"]["public_alias"] == "gpt-4o-mini"
+    assert saved["model_config"]["roles"]["buyer"]["requested_model"]["public_alias"] == "gemini-2.0-flash"
 
 
 def test_events_show_authoritative_effective_bundle_price(tmp_path, monkeypatch):

@@ -3,6 +3,20 @@ let pollTimer;
 let lastEventId = 0;
 let watchGeneration = 0;
 
+async function loadScenarios() {
+  const response = await fetch("/scenarios");
+  if (!response.ok) throw new Error("Scenario list could not be loaded");
+  const scenarios = await response.json();
+  const select = $("scenario");
+  select.replaceChildren();
+  scenarios.forEach((scenario) => {
+    const option = document.createElement("option");
+    option.value = scenario.id;
+    option.textContent = scenario.name;
+    select.appendChild(option);
+  });
+}
+
 async function loadModels() {
   const response = await fetch("/models");
   if (!response.ok) throw new Error("Model list could not be loaded");
@@ -162,3 +176,4 @@ $("start").addEventListener("click", async () => {
 });
 $("load").addEventListener("click", () => { const runId = $("run-id").value.trim(); if (runId) watch(runId); });
 loadModels().catch((error) => setMessage(error.message, true));
+loadScenarios().catch((error) => setMessage(error.message, true));
