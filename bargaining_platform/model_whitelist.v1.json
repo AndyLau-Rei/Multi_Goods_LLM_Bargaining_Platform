@@ -1,0 +1,56 @@
+{
+  "version": "1",
+  "default_models": {
+    "seller": "deepseek-chat",
+    "buyer": "deepseek-chat"
+  },
+  "models": [
+    {
+      "alias": "gpt-4o-mini",
+      "provider": "openai",
+      "model_id": "gpt-4o-mini",
+      "base_url": "https://api.openai.com/v1",
+      "enabled": true,
+      "json_schema": true
+    },
+    {
+      "alias": "gemini-2.0-flash",
+      "provider": "gemini",
+      "model_id": "gemini-2.0-flash",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "enabled": true
+    },
+    {
+      "alias": "deepseek-chat",
+      "provider": "deepseek",
+      "model_id": "deepseek-chat",
+      "base_url": "https://api.deepseek.com/v1",
+      "enabled": true,
+      "json_schema": false
+    },
+    {
+      "alias": "qwen-plus",
+      "provider": "qwen",
+      "model_id": "qwen-plus",
+      "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "enabled": true,
+      "json_schema": false
+    },
+    {
+      "alias": "kimi-k2-0711-preview",
+      "provider": "moonshot",
+      "model_id": "kimi-k2-0711-preview",
+      "base_url": "https://api.moonshot.ai/v1",
+      "enabled": true,
+      "json_schema": false
+    },
+    {
+      "alias": "glm-4.5-flash",
+      "provider": "zhipu",
+      "model_id": "glm-4.5-flash",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "enabled": true,
+      "json_schema": false
+    }
+  ]
+}

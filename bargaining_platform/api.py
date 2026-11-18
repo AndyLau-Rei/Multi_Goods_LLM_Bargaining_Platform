@@ -12,15 +12,16 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
 
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .metrics import calculate_metrics
-from .model_adapter import OpenAIAdapter
 from .models import json_safe
 from .prompt_builder import make_private_view
+from .provider_factory import available_models, create_role_adapters, resolve_models
 from .runner import default_mock_adapters, run_llm_negotiation
 from .scenario import load_scenario
 from .storage import DEFAULT_DB_PATH, load_run_from_sqlite, replay_run
@@ -30,6 +31,16 @@ from .validator import _multiply_money, _sum_money
 app = FastAPI(title="Bargaining Platform API", version="0.1.0")
 _STATIC_DIR = Path(__file__).with_name("static")
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Avoid echoing request values, which may contain a mistakenly supplied secret."""
+    errors = [
+        {key: value for key, value in error.items() if key != "input"}
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 # shortcut: progress lives in one API worker, use shared storage for multi-worker serving.
 _active_runs: dict[str, dict[str, Any]] = {}
@@ -52,9 +63,18 @@ def viewer() -> str:
     return (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
 
+@app.get("/models")
+def models() -> dict[str, Any]:
+    """List enabled public aliases without returning private provider settings."""
+    return available_models()
+
+
 class RunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     scenario_id: str
     agent_type: Literal["mock", "llm"] = "mock"
+    seller_model: str | None = None
+    buyer_model: str | None = None
 
 
 def _db_path() -> Path:
@@ -75,14 +95,23 @@ def _public_metrics(metrics: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def _run_in_background(run_id: str, scenario: dict, agent_type: str, db_path: Path) -> None:
+def _run_in_background(
+    run_id: str,
+    scenario: dict,
+    agent_type: str,
+    db_path: Path,
+    seller_model: str | None = None,
+    buyer_model: str | None = None,
+) -> None:
     try:
-        use_mock = agent_type == "mock" or not os.getenv("LLM_API_KEY")
+        model_config = None
+        adapters = None
+        if agent_type == "llm":
+            models, version = resolve_models(seller_model, buyer_model)
+            adapters, model_config = create_role_adapters(models, version)
+        use_mock = agent_type == "mock" or adapters is None
         if use_mock:
             adapters = default_mock_adapters()
-        else:
-            adapter = OpenAIAdapter()
-            adapters = {"seller": adapter, "buyer": adapter}
 
         def publish(progress: dict) -> None:
             with _active_runs_lock:
@@ -100,6 +129,7 @@ def _run_in_background(run_id: str, scenario: dict, agent_type: str, db_path: Pa
             db_path=db_path,
             mock_demo=use_mock,
             progress_callback=publish,
+            model_config=model_config,
         )
     except Exception:
         _logger.exception("Background negotiation failed for run %s", run_id)
@@ -116,12 +146,27 @@ def start_run(request: RunRequest, background_tasks: BackgroundTasks) -> dict[st
     """Schedule one negotiation and return its run ID immediately."""
     try:
         scenario = load_scenario(request.scenario_id)
+        if request.agent_type == "llm":
+            resolve_models(request.seller_model, request.buyer_model)
+        elif request.seller_model is not None or request.buyer_model is not None:
+            raise ValueError("MODEL_SELECTION_REQUIRES_LLM")
     except (OSError, KeyError, ValueError, RuntimeError) as exc:
-        raise HTTPException(status_code=400, detail="Run could not be started") from exc
+        detail = str(exc) if isinstance(exc, ValueError) and str(exc) in {
+            "UNKNOWN_MODEL", "MODEL_DISABLED", "MODEL_SELECTION_REQUIRES_LLM"
+        } else "Run could not be started"
+        raise HTTPException(status_code=400, detail=detail) from exc
     run_id = f"run-{uuid.uuid4().hex}"
     with _active_runs_lock:
         _active_runs[run_id] = {"status": "IN_PROGRESS", "round_number": 1, "events": []}
-    background_tasks.add_task(_run_in_background, run_id, scenario, request.agent_type, _db_path())
+    background_tasks.add_task(
+        _run_in_background,
+        run_id,
+        scenario,
+        request.agent_type,
+        _db_path(),
+        request.seller_model,
+        request.buyer_model,
+    )
     return {"run_id": run_id}
 
 

@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 from .experiments import ExperimentRunner, compare_experiment_configs
 from .metrics import calculate_metrics, format_failure_report, generate_failure_report
-from .model_adapter import OpenAIAdapter
+from .provider_factory import create_role_adapters, resolve_models
 from .runner import default_mock_adapters, run_llm_negotiation
 from .scenario import load_scenario
 from .storage import Event, export_run_to_jsonl, load_run_from_sqlite, replay_run
@@ -33,6 +32,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--seller-prompt", help="Optional seller prompt template path.")
     run.add_argument("--buyer-prompt", help="Optional buyer prompt template path.")
+    run.add_argument("--seller-model", help="Seller model whitelist alias (LLM mode).")
+    run.add_argument("--buyer-model", help="Buyer model whitelist alias (LLM mode).")
     run.add_argument(
         "--db-path", default=None,
         help="SQLite output path (default: results/runs.db).",
@@ -43,6 +44,8 @@ def _parser() -> argparse.ArgumentParser:
     experiment.add_argument("--db-path", default=None, help="SQLite output path.")
     experiment.add_argument("--seller-prompt", help="Optional seller prompt template path.")
     experiment.add_argument("--buyer-prompt", help="Optional buyer prompt template path.")
+    experiment.add_argument("--seller-model", help="Seller model whitelist alias for LLM runs.")
+    experiment.add_argument("--buyer-model", help="Buyer model whitelist alias for LLM runs.")
 
     compare = commands.add_parser(
         "compare", help="Run and compare two single-condition experiments."
@@ -90,18 +93,25 @@ def _parser() -> argparse.ArgumentParser:
 
 def _run(args: argparse.Namespace) -> int:
     scenario = load_scenario(args.scenario)
+    model_config = None
     if args.agent == "scripted":
+        if args.seller_model is not None or args.buyer_model is not None:
+            raise ValueError("MODEL_SELECTION_REQUIRES_LLM")
         print(
             f"Loaded scenario: {scenario['scenario_id']} "
             f"with {len(scenario['catalog'])} catalog items"
         )
         return 0
-    use_mock = args.agent == "mock" or not os.getenv("LLM_API_KEY")
+    if args.agent == "llm":
+        models, registry_version = resolve_models(args.seller_model, args.buyer_model)
+        adapters, model_config = create_role_adapters(models, registry_version)
+    else:
+        if args.seller_model is not None or args.buyer_model is not None:
+            raise ValueError("MODEL_SELECTION_REQUIRES_LLM")
+        adapters = None
+    use_mock = args.agent == "mock" or adapters is None
     if use_mock:
         adapters = default_mock_adapters()
-    else:
-        adapter = OpenAIAdapter()
-        adapters = {"seller": adapter, "buyer": adapter}
     engine = run_llm_negotiation(
         scenario,
         adapters,
@@ -109,6 +119,7 @@ def _run(args: argparse.Namespace) -> int:
         mock_demo=use_mock,
         seller_prompt_path=args.seller_prompt,
         buyer_prompt_path=args.buyer_prompt,
+        model_config=model_config,
     )
     print(f"Completed negotiation: {engine.state.outcome.status} (run_id: {engine.run_id})")
     return 0
@@ -137,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
                 db_path=database,
                 seller_prompt_path=args.seller_prompt,
                 buyer_prompt_path=args.buyer_prompt,
+                seller_model=args.seller_model,
+                buyer_model=args.buyer_model,
             )
             results = runner.run()
             print(f"Completed {len(results)} experiment runs")

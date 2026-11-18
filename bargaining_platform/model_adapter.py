@@ -67,6 +67,8 @@ class OpenAIAdapter(BaseLLMAdapter):
         *,
         api_key: str | None = None,
         endpoint: str = "https://api.openai.com/v1/chat/completions",
+        provider: str = "openai",
+        json_schema: bool = True,
         timeout: float = 30.0,
         max_api_retries: int = 3,
         backoff_seconds: float = 0.5,
@@ -76,6 +78,8 @@ class OpenAIAdapter(BaseLLMAdapter):
         self.model = model
         self.api_key = api_key or os.getenv("LLM_API_KEY")
         self.endpoint = endpoint
+        self.provider = provider
+        self.json_schema = json_schema
         self.timeout = timeout
         self.max_api_retries = max_api_retries
         self.backoff_seconds = backoff_seconds
@@ -86,14 +90,18 @@ class OpenAIAdapter(BaseLLMAdapter):
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "action",
-                    "strict": False,
-                    "schema": action_schema,
-                },
-            },
+            "response_format": (
+                {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "action",
+                        "strict": False,
+                        "schema": action_schema,
+                    },
+                }
+                if self.json_schema
+                else {"type": "json_object"}
+            ),
         }
         started = time.perf_counter()
         for attempt in range(self.max_api_retries + 1):
@@ -129,6 +137,67 @@ class OpenAIAdapter(BaseLLMAdapter):
         )
         with urlopen(request, timeout=self.timeout) as response:
             return json.loads(response.read().decode("utf-8"))
+
+
+class GeminiAdapter(BaseLLMAdapter):
+    """Minimal Gemini generateContent adapter using the standard library."""
+
+    def __init__(self, model: str, api_key: str, base_url: str, timeout: float = 30.0):
+        self.model = model
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+
+    def generate(self, prompt: str, action_schema: dict) -> GenerationResult:
+        endpoint = f"{self.base_url}/models/{self.model}:generateContent"
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "responseJsonSchema": action_schema,
+            },
+        }
+        started = time.perf_counter()
+        request = Request(
+            endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "x-goog-api-key": self.api_key,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        for attempt in range(4):
+            try:
+                with urlopen(request, timeout=self.timeout) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                break
+            except Exception as exc:
+                if not _retryable(exc) or attempt == 3:
+                    raise AdapterError("Gemini API request failed") from exc
+                time.sleep(0.5 * (2**attempt))
+        try:
+            text = result["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise AdapterError("Gemini API response has no message content") from exc
+        if not isinstance(text, str):
+            raise AdapterError("Gemini API message content is not text")
+        usage = result.get("usageMetadata") or {}
+        metadata = _metadata(
+            self.model,
+            prompt,
+            text,
+            (time.perf_counter() - started) * 1000,
+            prompt_tokens=usage.get("promptTokenCount"),
+            completion_tokens=usage.get("candidatesTokenCount"),
+        )
+        metadata["api_attempts"] = attempt + 1
+        return GenerationResult(text, metadata)
+
+
+def openai_adapters() -> dict[str, OpenAIAdapter]:
+    """Create an isolated provider client for each negotiating role."""
+    return {role: OpenAIAdapter() for role in ("seller", "buyer")}
 
 
 def _retryable(error: Exception) -> bool:

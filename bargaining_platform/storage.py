@@ -99,7 +99,8 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             outcome_status TEXT,
             created_at TEXT NOT NULL,
             scenario_json TEXT NOT NULL,
-            outcome_json TEXT
+            outcome_json TEXT,
+            model_config_json TEXT
         );
         CREATE TABLE IF NOT EXISTS events (
             run_id TEXT NOT NULL,
@@ -121,6 +122,8 @@ def _create_schema(connection: sqlite3.Connection) -> None:
     run_columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
     if "condition_id" not in run_columns:
         connection.execute("ALTER TABLE runs ADD COLUMN condition_id TEXT")
+    if "model_config_json" not in run_columns:
+        connection.execute("ALTER TABLE runs ADD COLUMN model_config_json TEXT")
     columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
     if "metadata_json" not in columns:
         connection.execute("ALTER TABLE events ADD COLUMN metadata_json TEXT")
@@ -134,6 +137,7 @@ def save_run_to_sqlite(
     db_path: str | Path = DEFAULT_DB_PATH,
     *,
     condition_id: str | None = None,
+    model_config: dict | None = None,
 ) -> None:
     """Persist one completed run and its append-only event snapshot."""
     database = Path(db_path)
@@ -148,8 +152,8 @@ def save_run_to_sqlite(
                 """
                 INSERT INTO runs
                     (run_id, condition_id, scenario_id, max_rounds, outcome_status, created_at,
-                     scenario_json, outcome_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     scenario_json, outcome_json, model_config_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -160,6 +164,7 @@ def save_run_to_sqlite(
                     timestamp,
                     _json_text(scenario),
                     _json_text(outcome_data) if outcome_data is not None else None,
+                    _json_text(model_config) if model_config is not None else None,
                 ),
             )
             connection.executemany(
@@ -217,6 +222,7 @@ def load_run_from_sqlite(
         "scenario_id": run["scenario_id"],
         "max_rounds": run["max_rounds"],
         "outcome_status": run["outcome_status"],
+        "model_config": decode(run["model_config_json"]),
         "created_at": run["created_at"],
         "scenario": decode(run["scenario_json"]),
         "outcome": decode(run["outcome_json"]),

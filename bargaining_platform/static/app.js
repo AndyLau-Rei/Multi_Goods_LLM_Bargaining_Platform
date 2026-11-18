@@ -3,6 +3,24 @@ let pollTimer;
 let lastEventId = 0;
 let watchGeneration = 0;
 
+async function loadModels() {
+  const response = await fetch("/models");
+  if (!response.ok) throw new Error("Model list could not be loaded");
+  const data = await response.json();
+  ["seller-model", "buyer-model"].forEach((id) => {
+    const select = $(id);
+    select.replaceChildren();
+    data.models.forEach((model) => {
+      const option = document.createElement("option");
+      option.value = model.alias;
+      option.textContent = `${model.provider} · ${model.alias}`;
+      select.appendChild(option);
+    });
+    const role = id === "seller-model" ? "seller" : "buyer";
+    select.value = data.default_models[role];
+  });
+}
+
 function setMessage(text, isError = false) {
   const message = $("message");
   message.textContent = text || "";
@@ -132,9 +150,15 @@ async function watch(runId) {
 
 $("start").addEventListener("click", async () => {
   try {
-    const response = await fetch("/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scenario_id: $("scenario").value, agent_type: $("agent").value }) });
+    const request = { scenario_id: $("scenario").value, agent_type: $("agent").value };
+    if (request.agent_type === "llm") {
+      request.seller_model = $("seller-model").value;
+      request.buyer_model = $("buyer-model").value;
+    }
+    const response = await fetch("/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) });
     if (!response.ok) throw new Error("Could not start negotiation");
     const data = await response.json(); $("run-id").value = data.run_id; await watch(data.run_id);
   } catch (error) { setMessage(error.message); }
 });
 $("load").addEventListener("click", () => { const runId = $("run-id").value.trim(); if (runId) watch(runId); });
+loadModels().catch((error) => setMessage(error.message, true));

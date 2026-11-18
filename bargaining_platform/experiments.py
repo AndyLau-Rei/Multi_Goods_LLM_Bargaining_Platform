@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .model_adapter import MockLLMAdapter, OpenAIAdapter
+from .model_adapter import MockLLMAdapter
 from .models import validate_scenario
+from .provider_factory import create_role_adapters, resolve_models
 from .runner import default_mock_adapters, run_llm_negotiation
 from .scenario import load_scenario
 from .storage import DEFAULT_DB_PATH
@@ -47,6 +47,8 @@ class ExperimentRunner:
         condition_namespace: str | None = None,
         seller_prompt_path: str | Path | None = None,
         buyer_prompt_path: str | Path | None = None,
+        seller_model: str | None = None,
+        buyer_model: str | None = None,
     ):
         self.config_path = Path(config) if isinstance(config, (str, Path)) else None
         if self.config_path is not None:
@@ -68,6 +70,8 @@ class ExperimentRunner:
         self.db_path = Path(db_path)
         self.seller_prompt_path = seller_prompt_path
         self.buyer_prompt_path = buyer_prompt_path
+        self.seller_model = seller_model
+        self.buyer_model = buyer_model
         self.condition_namespace = condition_namespace or self.config.get("condition_namespace")
         if self.condition_namespace is None and self.config_path is not None:
             self.condition_namespace = self.config_path.stem
@@ -80,15 +84,39 @@ class ExperimentRunner:
         base_scenario = load_scenario(self._scenario_path())
         results: list[ExperimentResult] = []
         for variation in self.config["variations"]:
-            condition_id = condition_id_for(variation, self.condition_namespace)
-            scenario = deepcopy(base_scenario)
+            seller_model = (
+                self.seller_model
+                if self.seller_model is not None
+                else variation.get("seller_model", self.config.get("seller_model"))
+            )
+            buyer_model = (
+                self.buyer_model
+                if self.buyer_model is not None
+                else variation.get("buyer_model", self.config.get("buyer_model"))
+            )
             agent_type = variation.get("agent_type", self.config.get("agent_type", "mock"))
-            overrides = {key: value for key, value in variation.items() if key != "agent_type"}
+            if agent_type == "llm":
+                resolved, _ = resolve_models(seller_model, buyer_model)
+                seller_model = resolved["seller"]["alias"]
+                buyer_model = resolved["buyer"]["alias"]
+            condition = dict(variation)
+            if seller_model is not None:
+                condition["seller_model"] = seller_model
+            if buyer_model is not None:
+                condition["buyer_model"] = buyer_model
+            condition_id = condition_id_for(condition, self.condition_namespace)
+            scenario = deepcopy(base_scenario)
+            overrides = {
+                key: value for key, value in variation.items()
+                if key not in {"agent_type", "seller_model", "buyer_model"}
+            }
             _deep_merge(scenario, overrides)
             validate_scenario(scenario)
             for repetition in range(1, self.config["repetitions"] + 1):
                 run_id = f"{condition_id}-rep-{repetition}-{uuid.uuid4().hex[:8]}"
-                adapters, mock_demo = self._adapters(agent_type, scenario)
+                adapters, mock_demo, model_config = self._adapters(
+                    agent_type, scenario, seller_model, buyer_model
+                )
                 engine = run_llm_negotiation(
                     deepcopy(scenario),
                     adapters,
@@ -98,6 +126,7 @@ class ExperimentRunner:
                     condition_id=condition_id,
                     seller_prompt_path=self.seller_prompt_path,
                     buyer_prompt_path=self.buyer_prompt_path,
+                    model_config=model_config,
                 )
                 results.append(
                     ExperimentResult(
@@ -115,20 +144,30 @@ class ExperimentRunner:
         return self.config_path.parent / path
 
     @staticmethod
-    def _adapters(agent_type: str, scenario: dict) -> tuple[dict, bool]:
+    def _adapters(
+        agent_type: str,
+        scenario: dict,
+        seller_model: str | None = None,
+        buyer_model: str | None = None,
+    ) -> tuple[dict, bool, dict | None]:
         if agent_type not in {"mock", "llm", "scripted"}:
             raise ValueError(f"Unsupported agent_type: {agent_type}")
-        if agent_type == "llm" and os.getenv("LLM_API_KEY"):
-            adapter = OpenAIAdapter()
-            return {"seller": adapter, "buyer": adapter}, False
+        if agent_type == "llm":
+            models, version = resolve_models(seller_model, buyer_model)
+            adapters, model_config = create_role_adapters(models, version)
+            if adapters is not None:
+                return adapters, False, model_config
+            return _budget_safe_mock_adapters(scenario), True, model_config
+        if seller_model is not None or buyer_model is not None:
+            raise ValueError("MODEL_SELECTION_REQUIRES_LLM")
         if (
             agent_type == "mock"
             and scenario.get("bundle_rules", {}).get("max_discount_per_unit") == 0
         ):
-            return _no_bundle_mock_adapters(), True
+            return _no_bundle_mock_adapters(), True, None
         if agent_type == "mock" and _buyer_budget(scenario) >= 160:
-            return default_mock_adapters(), True
-        return _budget_safe_mock_adapters(scenario), True
+            return default_mock_adapters(), True, None
+        return _budget_safe_mock_adapters(scenario), True, None
 
 
 def _deep_merge(target: dict, overrides: dict) -> None:
