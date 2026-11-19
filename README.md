@@ -214,3 +214,25 @@ rejected when either secret is missing or both secrets are identical.
 The unauthenticated `/status` endpoint and viewer omit role utilities and
 valuation-derived metrics. Full utility metrics remain available through the
 local CLI and persisted run records.
+
+### Public conversation example
+
+The viewer renders structured public events returned by `/runs/{run_id}/events`.
+For a seller proposal followed by a buyer acceptance, the conversation appears as:
+
+```text
+Platform: Please make the opening proposal.
+Seller · PROPOSE
+  A: 2 box at 100 per box (effective 90 per unit)
+  B: 1 piece at 50 per piece
+  Bundle condition: A receives 10 off per unit when B quantity is at least 1.
+Platform: The seller submitted a proposal. Buyer is reviewing it.
+Platform: Please review the seller's proposal and choose COUNTER, ACCEPT, or WALK_AWAY.
+Buyer · ACCEPT
+  Buyer accepted the current proposal.
+Platform: The proposal was accepted.
+```
+
+The public conversation includes only action, proposal, and sanitized platform
+message fields. Private profiles, role background prompts, decision summaries,
+raw model output, proposal IDs, and provider details are not rendered.

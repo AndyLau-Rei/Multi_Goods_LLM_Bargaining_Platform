@@ -16,6 +16,7 @@ from .prompt_builder import (
     render_platform_instruction,
     render_prompt,
 )
+from .public_events import public_events
 from .storage import DEFAULT_DB_PATH, save_run_to_sqlite
 from .validator import parse_action
 
@@ -126,13 +127,17 @@ def run_llm_negotiation(
         )
         role_config["prompt_version"] = _prompt_version(agent.prompt_path)
         agent.model_metadata = deepcopy(role_config)
+    if progress_callback is not None:
+        progress_callback({
+            "round_number": engine.state.round_number,
+            "events": public_events(engine.event_logger.events, engine.state.public_transcript),
+        })
     while engine.state.outcome is None:
         role = engine.state.current_actor
         agent = agents[role]
         action_schema = _action_schema()
-        parsed, prompt, new_messages, generated = agent.decide(engine.state, action_schema)
         event_count = len(engine.event_logger.events)
-        transcript_count = len(engine.state.public_transcript)
+        parsed, prompt, new_messages, generated = agent.decide(engine.state, action_schema)
         prompt_records.append({
             "event_id": event_count + 1,
             "role": role,
@@ -201,23 +206,14 @@ def run_llm_negotiation(
                             round_number=engine.state.round_number,
                         )
         if progress_callback is not None:
-            public_actions = iter(engine.state.public_transcript[transcript_count:])
-            public_events = []
-            for event in engine.event_logger.events[event_count:]:
-                record = {
-                    "event_id": event.event_id,
-                    "event_type": event.event_type,
-                    "actor": event.actor,
-                    "round_number": event.round_number,
-                }
-                if event.event_type == "ACTION_ATTEMPT" and event.validation_result["ok"]:
-                    record["public_transcript"] = deepcopy(next(public_actions))
-                elif event.event_type == "STATE_TRANSITION":
-                    record["state_transition_summary"] = event.state_transition_summary
-                else:
-                    continue
-                public_events.append(record)
-            progress_callback({"round_number": engine.state.round_number, "events": public_events})
+            progress_callback({
+                "round_number": engine.state.round_number,
+                "events": public_events(
+                    engine.event_logger.events,
+                    engine.state.public_transcript,
+                    engine.state.outcome.to_dict() if engine.state.outcome else None,
+                ),
+            })
     save_run_to_sqlite(
         run_id,
         scenario,

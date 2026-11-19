@@ -7,7 +7,7 @@ from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 
 from bargaining_platform import api as api_module
-from bargaining_platform.api import _public_action, app
+from bargaining_platform.api import app
 from bargaining_platform.model_adapter import MockLLMAdapter
 from bargaining_platform.runner import run_llm_negotiation
 from bargaining_platform.scenario import load_scenario
@@ -311,32 +311,27 @@ def test_events_show_authoritative_effective_bundle_price(tmp_path, monkeypatch)
 
     response = TestClient(app).get("/runs/discounted/events")
     assert response.status_code == 200
-    proposal = response.json()["events"][0]["public_transcript"]["proposal"]
+    action_event = next(event for event in response.json()["events"] if event["event_type"] == "SELLER_ACTION")
+    proposal = action_event["public_proposal"]
     assert proposal["terms"][0]["unit_price"] == 120
     assert proposal["terms"][0]["effective_unit_price"] == 100
-    assert proposal["terms"][0]["effective_total_price"] == 100
-    assert proposal["effective_total_price"] == 160
     assert proposal["conditions"][0]["discount_per_unit"] == 20
+    assert proposal["action_type"] == "PROPOSE"
+    assert set(proposal) == {"action_type", "terms", "conditions"}
+    assert set(action_event) == {"event_type", "actor", "action_type", "public_proposal", "round_number"}
+    assert {"event_type", "actor", "message", "round_number"} == set(
+        next(event for event in response.json()["events"] if event["event_type"] == "PLATFORM_MESSAGE")
+    )
     assert response.json()["round_number"] == 1
     serialized = json.dumps(response.json(), sort_keys=True)
     assert "validation_result" not in serialized
     assert "raw_output" not in serialized
     assert "metadata" not in serialized
     assert "private_decision_summary" not in serialized
-
-
-def test_api_effective_totals_preserve_large_integers():
-    price = 10**40 + 1
-    action = {
-        "proposal": {
-            "terms": [{"item_id": "A", "quantity": 2, "unit_price": price}],
-            "effective_prices": {"A": price},
-        }
-    }
-    proposal = _public_action(action)["proposal"]
-    assert proposal["terms"][0]["unit_price"] == price
-    assert proposal["terms"][0]["effective_total_price"] == 2 * price
-    assert proposal["effective_total_price"] == 2 * price
+    assert "decision_summary" not in serialized
+    assert "proposal_id" not in serialized
+    assert "original_prices" not in serialized
+    assert "effective_prices" not in serialized
 
 
 def test_api_round_display_with_retries(tmp_path, monkeypatch):
@@ -399,14 +394,13 @@ def test_api_schema_corrections_do_not_emit_false_terminal_transition(tmp_path, 
     )
     response = TestClient(app).get("/runs/empty-actions/events")
     assert response.status_code == 200
-    public_actions = [
-        event for event in response.json()["events"]
-        if event["event_type"] == "ACTION_ATTEMPT"
-    ]
+    public_actions = [event for event in response.json()["events"] if event["event_type"] in {"SELLER_ACTION", "BUYER_ACTION"}]
     assert len(public_actions) == 2
-    assert [event["public_transcript"]["action_type"] for event in public_actions] == [
+    assert [event["action_type"] for event in public_actions] == [
         "PROPOSE", "WALK_AWAY",
     ]
+    assert any(event.get("message", "").startswith("The previous action was invalid") for event in response.json()["events"])
+    assert all("public_transcript" not in event for event in response.json()["events"])
     attempts = load_run_from_sqlite("empty-actions", tmp_path / "runs.db")["events"]
     invalid_attempts = [
         event for event in attempts

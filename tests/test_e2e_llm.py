@@ -331,14 +331,18 @@ def test_progress_callback_publishes_only_committed_public_events(tmp_path):
         progress_callback=progress.append,
     )
 
-    assert len(progress) == 3
-    assert progress[0]["events"] == []
-    assert [event["event_id"] for update in progress for event in update["events"]] == [2, 3, 4, 5]
+    assert len(progress) == 4
+    assert progress[0]["events"] == [{
+        "event_type": "PLATFORM_MESSAGE", "actor": "platform",
+        "message": "Please make the opening proposal.", "round_number": 1,
+    }]
+    assert [event["event_type"] for event in progress[-1]["events"] if event["event_type"].endswith("_ACTION")] == ["SELLER_ACTION", "BUYER_ACTION"]
     assert progress[-1]["events"][-1]["state_transition_summary"] == "Proposal accepted; game ended"
     assert progress[-1]["round_number"] == 1
     serialized = json.dumps(progress)
     for private_field in ("raw_output", "metadata", "validation_result", "private_decision_summary", "seller-only note"):
         assert private_field not in serialized
+    assert all("event_id" not in event for update in progress for event in update["events"])
 
 
 def test_runner_uses_separate_role_agents_and_prompt_contexts(tmp_path, monkeypatch):

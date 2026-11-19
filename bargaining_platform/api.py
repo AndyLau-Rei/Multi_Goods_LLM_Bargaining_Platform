@@ -6,7 +6,6 @@ import logging
 import os
 import uuid
 from copy import deepcopy
-from decimal import Decimal
 from hmac import compare_digest
 from pathlib import Path
 from threading import Lock
@@ -19,13 +18,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
 from .metrics import calculate_metrics
-from .models import json_safe
 from .prompt_builder import default_prompt_path, make_private_view, render_prompt
+from .public_events import public_events as build_public_events
 from .provider_factory import available_models, create_role_adapters, resolve_models
 from .runner import default_mock_adapters, run_llm_negotiation
 from .scenario import load_scenario
 from .storage import DEFAULT_DB_PATH, load_run_from_sqlite, replay_run
-from .validator import _multiply_money, _sum_money
 
 
 app = FastAPI(title="Bargaining Platform API", version="0.1.0")
@@ -148,10 +146,7 @@ def _run_in_background(
             with _active_runs_lock:
                 active = _active_runs[run_id]
                 active["round_number"] = progress["round_number"]
-                for event in progress["events"]:
-                    if "public_transcript" in event:
-                        event = {**event, "public_transcript": _public_action(event["public_transcript"])}
-                    active["events"].append(event)
+                active["events"] = progress["events"]
 
         run_llm_negotiation(
             scenario,
@@ -250,7 +245,7 @@ def run_status(run_id: str) -> dict[str, Any]:
 
 @app.get("/runs/{run_id}/events")
 def run_events(run_id: str) -> dict[str, Any]:
-    """Return replayed public actions and transition summaries only."""
+    """Return the public viewer event format."""
     with _active_runs_lock:
         active = _active_runs.get(run_id)
         if active is not None:
@@ -267,52 +262,11 @@ def run_events(run_id: str) -> dict[str, Any]:
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail="Run could not be replayed") from exc
 
-    transcript = iter(state.public_transcript)
-    public_events = []
-    for event in run["events"]:
-        record = {
-            "event_id": event["event_id"],
-            "event_type": event["event_type"],
-            "actor": event["actor"],
-            "round_number": event["round_number"],
-        }
-        if event["event_type"] == "ACTION_ATTEMPT":
-            # Validation is used internally to identify committed actions only.
-            if not (event.get("validation_result") or {}).get("ok"):
-                continue
-            record["public_transcript"] = _public_action(next(transcript))
-        elif event["event_type"] == "STATE_TRANSITION":
-            record["state_transition_summary"] = event["state_transition_summary"]
-        else:
-            continue
-        public_events.append(record)
-    return {"run_id": run_id, "round_number": state.round_number, "events": public_events}
-
-
-def _public_action(action: dict) -> dict:
-    """Expose effective prices without changing the proposal's base terms."""
-    public = deepcopy(action)
-    proposal = public.get("proposal")
-    if not isinstance(proposal, dict):
-        return public
-    effective = proposal.get("effective_prices") or {}
-    line_totals = []
-    for term in proposal.get("terms", []):
-        item_id = term.get("item_id")
-        if item_id not in effective:
-            continue
-        effective_unit_price = effective[item_id]
-        price = (
-            Decimal(effective_unit_price)
-            if isinstance(effective_unit_price, str)
-            else effective_unit_price
-        )
-        line_total = _multiply_money(term["quantity"], price)
-        term["effective_unit_price"] = effective_unit_price
-        term["effective_total_price"] = json_safe(line_total)
-        line_totals.append(line_total)
-    proposal["effective_total_price"] = json_safe(_sum_money(line_totals))
-    return public
+    return {
+        "run_id": run_id,
+        "round_number": state.round_number,
+        "events": build_public_events(run["events"], state.public_transcript, run["outcome"]),
+    }
 
 
 @app.get("/runs/{run_id}/view")

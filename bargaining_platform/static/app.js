@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 let pollTimer;
-let lastEventId = 0;
+let lastEventCount = 0;
 let watchGeneration = 0;
 
 async function loadScenarios() {
@@ -62,22 +62,37 @@ function money(value) { return value === undefined || value === null ? "—" : S
 function proposalText(proposal) {
   if (!proposal) return "";
   const lines = (proposal.terms || []).map((term) => {
-    const effective = term.effective_unit_price ?? proposal.effective_prices?.[term.item_id];
-    return `${term.item_id}: ${term.quantity} × ${money(effective ?? term.unit_price)} effective`;
+    const effective = term.effective_unit_price;
+    const price = `${money(term.unit_price)} per ${term.unit || "unit"}`;
+    return `${term.item_id}: ${term.quantity} ${term.unit || "unit"} at ${price}${effective === undefined ? "" : ` (effective ${money(effective)} per ${term.unit || "unit"})`}`;
   });
   (proposal.conditions || []).forEach((condition) => {
-    lines.push(`Condition: ${condition.discounted_item_id} discount ${money(condition.discount_per_unit)} if ${condition.required_item_id} ≥ ${condition.minimum_required_quantity}`);
+    lines.push(`Bundle condition: ${condition.discounted_item_id} receives ${money(condition.discount_per_unit)} off per unit when ${condition.required_item_id} quantity is at least ${condition.minimum_required_quantity}.`);
   });
   return lines.join("\n");
+}
+
+function actionText(event) {
+  if (event.action_type === "ACCEPT") {
+    return `${event.actor === "buyer" ? "Buyer" : "Seller"} accepted the current proposal.`;
+  }
+  if (event.action_type === "WALK_AWAY") {
+    return `${event.actor === "buyer" ? "Buyer" : "Seller"} walked away from the negotiation.`;
+  }
+  return proposalText(event.public_proposal);
 }
 
 function renderEvents(events, roundNumber, inProgress) {
   const transcript = $("transcript");
   transcript.querySelector("[data-thinking]")?.remove();
-  const publicEvents = events.filter((event) => event.event_type === "ACTION_ATTEMPT" && event.public_transcript);
-  events.forEach((event) => {
-    if (event.event_id <= lastEventId) return;
-    lastEventId = event.event_id;
+  events.slice(lastEventCount).forEach((event) => {
+    if (event.event_type === "PLATFORM_MESSAGE") {
+      const system = document.createElement("p");
+      system.className = "text-center text-xs text-gray-500";
+      system.textContent = event.message;
+      transcript.appendChild(system);
+      return;
+    }
     if (event.event_type === "STATE_TRANSITION" && event.state_transition_summary) {
       const system = document.createElement("p");
       system.className = "text-center text-xs text-gray-400";
@@ -85,8 +100,7 @@ function renderEvents(events, roundNumber, inProgress) {
       transcript.appendChild(system);
       return;
     }
-    if (event.event_type !== "ACTION_ATTEMPT" || !event.public_transcript) return;
-    const action = event.public_transcript || {};
+    if (event.event_type !== "SELLER_ACTION" && event.event_type !== "BUYER_ACTION") return;
     const bubble = document.createElement("article");
     bubble.className = `flex max-w-[88%] gap-3 ${event.actor === "buyer" ? "ml-auto flex-row-reverse" : "mr-auto"}`;
     const badge = document.createElement("span");
@@ -96,15 +110,16 @@ function renderEvents(events, roundNumber, inProgress) {
     content.className = `rounded-2xl px-4 py-3 ${event.actor === "buyer" ? "rounded-tr-md border border-blue-100 bg-blue-50 text-gray-800" : "rounded-tl-md bg-gray-100 text-gray-800"}`;
     const title = document.createElement("strong");
     title.className = "mb-1 block text-xs font-semibold capitalize text-gray-500";
-    title.textContent = `${event.actor || "actor"} · ${action.action_type || "action"}`;
+    title.textContent = `${event.actor || "actor"} · ${event.action_type || "action"}`;
     const body = document.createElement("pre");
     body.className = "m-0 whitespace-pre-wrap font-sans text-sm leading-6";
-    body.textContent = action.proposal ? proposalText(action.proposal) : `Proposal: ${action.proposal_id || "—"}`;
+    body.textContent = actionText(event);
     content.append(title, body);
     bubble.append(badge, content);
     transcript.appendChild(bubble);
   });
-  if (publicEvents.length) {
+  lastEventCount = events.length;
+  if (events.some((event) => event.event_type === "SELLER_ACTION" || event.event_type === "BUYER_ACTION")) {
     transcript.querySelector("[data-empty]")?.remove();
   } else if (!transcript.querySelector("[data-empty]")) {
     const empty = document.createElement("p");
@@ -148,7 +163,7 @@ async function refresh(runId, generation) {
 async function watch(runId) {
   clearInterval(pollTimer);
   const generation = ++watchGeneration;
-  lastEventId = 0;
+  lastEventCount = 0;
   $("transcript").replaceChildren();
   renderEvents([], 1, true);
   setMessage(`Loading run ${runId}…`);
