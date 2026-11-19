@@ -5,7 +5,6 @@ import sqlite3
 from copy import deepcopy
 from contextlib import closing
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -19,7 +18,6 @@ DEFAULT_DB_PATH = Path("results/runs.db")
 @dataclass(frozen=True)
 class Event:
     event_id: int
-    timestamp: str
     event_type: str
     actor: str | None
     raw_output: Any = None
@@ -59,7 +57,6 @@ class EventLogger:
     ) -> Event:
         event = Event(
             event_id=len(self._events) + 1,
-            timestamp=datetime.now(timezone.utc).isoformat(),
             event_type=event_type,
             actor=actor,
             raw_output=(
@@ -100,7 +97,6 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             scenario_id TEXT NOT NULL,
             max_rounds INTEGER NOT NULL,
             outcome_status TEXT,
-            created_at TEXT NOT NULL,
             scenario_json TEXT NOT NULL,
             outcome_json TEXT,
             model_config_json TEXT
@@ -108,7 +104,6 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS events (
             run_id TEXT NOT NULL,
             event_id INTEGER NOT NULL,
-            timestamp TEXT NOT NULL,
             event_type TEXT NOT NULL,
             actor TEXT,
             raw_output_json TEXT,
@@ -121,6 +116,16 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             PRIMARY KEY (run_id, event_id),
             FOREIGN KEY (run_id) REFERENCES runs(run_id)
         );
+        CREATE TABLE IF NOT EXISTS prompts (
+            run_id TEXT NOT NULL,
+            event_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            action_schema TEXT NOT NULL,
+            output TEXT NOT NULL,
+            PRIMARY KEY (run_id, event_id),
+            FOREIGN KEY (run_id, event_id) REFERENCES events(run_id, event_id)
+        );
         """
     )
     run_columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
@@ -128,7 +133,12 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE runs ADD COLUMN condition_id TEXT")
     if "model_config_json" not in run_columns:
         connection.execute("ALTER TABLE runs ADD COLUMN model_config_json TEXT")
+    if "created_at" in run_columns:
+        connection.execute("ALTER TABLE runs DROP COLUMN created_at")
     columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+    if "timestamp" in columns:
+        connection.execute("ALTER TABLE events DROP COLUMN timestamp")
+        columns.remove("timestamp")
     if "metadata_json" not in columns:
         connection.execute("ALTER TABLE events ADD COLUMN metadata_json TEXT")
     if "round_number" not in columns:
@@ -144,12 +154,12 @@ def save_run_to_sqlite(
     *,
     condition_id: str | None = None,
     model_config: dict | None = None,
+    prompts: list[dict] | tuple[dict, ...] = (),
 ) -> None:
     """Persist one completed run and its append-only event snapshot."""
     database = Path(db_path)
     database.parent.mkdir(parents=True, exist_ok=True)
     outcome_data = outcome.to_dict() if isinstance(outcome, Outcome) else outcome
-    timestamp = datetime.now(timezone.utc).isoformat()
     with closing(sqlite3.connect(database)) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
         _create_schema(connection)
@@ -157,9 +167,9 @@ def save_run_to_sqlite(
             connection.execute(
                 """
                 INSERT INTO runs
-                    (run_id, condition_id, scenario_id, max_rounds, outcome_status, created_at,
+                    (run_id, condition_id, scenario_id, max_rounds, outcome_status,
                      scenario_json, outcome_json, model_config_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -167,7 +177,6 @@ def save_run_to_sqlite(
                     scenario["scenario_id"],
                     scenario["max_rounds"],
                     outcome_data.get("status") if outcome_data else None,
-                    timestamp,
                     _json_text(scenario),
                     _json_text(outcome_data) if outcome_data is not None else None,
                     _json_text(model_config) if model_config is not None else None,
@@ -176,17 +185,16 @@ def save_run_to_sqlite(
             connection.executemany(
                 """
                 INSERT INTO events
-                    (run_id, event_id, timestamp, event_type, actor,
+                    (run_id, event_id, event_type, actor,
                      raw_output_json, parsed_action_json, validation_result_json,
                      state_transition_summary, private_decision_summary, metadata_json,
                      round_number)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     (
                         run_id,
                         event.event_id,
-                        event.timestamp,
                         event.event_type,
                         event.actor,
                         _json_text(event.raw_output) if event.raw_output is not None else None,
@@ -202,6 +210,23 @@ def save_run_to_sqlite(
                         event.round_number,
                     )
                     for event in events
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO prompts (run_id, event_id, role, prompt, action_schema, output)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    (
+                        run_id,
+                        prompt["event_id"],
+                        prompt["role"],
+                        _json_text(prompt["prompt"]),
+                        _json_text(prompt["action_schema"]),
+                        prompt["output"],
+                    )
+                    for prompt in prompts
                 ),
             )
 
@@ -220,6 +245,9 @@ def load_run_from_sqlite(
         event_rows = connection.execute(
             "SELECT * FROM events WHERE run_id = ? ORDER BY event_id", (run_id,)
         ).fetchall()
+        prompt_rows = connection.execute(
+            "SELECT * FROM prompts WHERE run_id = ? ORDER BY event_id", (run_id,)
+        ).fetchall()
 
     def decode(value: str | None) -> Any:
         return json.loads(value) if value is not None else None
@@ -231,14 +259,12 @@ def load_run_from_sqlite(
         "max_rounds": run["max_rounds"],
         "outcome_status": run["outcome_status"],
         "model_config": decode(run["model_config_json"]),
-        "created_at": run["created_at"],
         "scenario": decode(run["scenario_json"]),
         "outcome": decode(run["outcome_json"]),
         "events": [
             {
                 "run_id": row["run_id"],
                 "event_id": row["event_id"],
-                "timestamp": row["timestamp"],
                 "event_type": row["event_type"],
                 "actor": row["actor"],
                 "raw_output": decode(row["raw_output_json"]),
@@ -250,6 +276,17 @@ def load_run_from_sqlite(
                 "round_number": row["round_number"],
             }
             for row in event_rows
+        ],
+        "prompts": [
+            {
+                "run_id": row["run_id"],
+                "event_id": row["event_id"],
+                "role": row["role"],
+                "prompt": decode(row["prompt"]),
+                "action_schema": decode(row["action_schema"]),
+                "output": row["output"],
+            }
+            for row in prompt_rows
         ],
     }
 

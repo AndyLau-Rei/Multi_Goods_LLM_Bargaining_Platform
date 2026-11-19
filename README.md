@@ -147,7 +147,9 @@ Each event is written on one line. Decimal monetary values are serialized as str
 
 Private profiles are isolated by role. The seller's costs and floors never enter the buyer view, and the buyer's values and budget never enter the seller view. Agent output is checked against the action schema, including a required `decision_summary` on proposals. Invalid output is logged and returned to the same agent for correction without a retry limit. Proposal prices may fall outside private constraints; those constraints are checked when a proposal is accepted, and a failed acceptance ends the negotiation as `NO_DEAL`.
 
-Event records include the current round number. A round is one valid response from each role; invalid output and acceptance do not advance the round.
+Event records include the current round number and are ordered by `event_id`; timestamps are not recorded. A round is one valid response from each role; invalid output and acceptance do not advance the round.
+
+LLM runs store each generation in the SQLite `prompts` table, keyed by run and event. `prompt` contains only messages added since that agent's previous generation (including its initial instructions on the first generation), alongside the action schema and raw model output.
 
 ## Tests
 

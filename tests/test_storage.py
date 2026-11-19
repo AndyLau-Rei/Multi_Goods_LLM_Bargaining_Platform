@@ -124,6 +124,8 @@ def test_sqlite_persistence(tmp_path):
     assert len(saved["events"]) == len(engine.event_logger.events)
     assert [event["event_id"] for event in saved["events"]] == [1, 2, 3, 4]
     assert [event["round_number"] for event in saved["events"]] == [1, 1, 1, 1]
+    assert "created_at" not in saved
+    assert all("timestamp" not in event for event in saved["events"])
     assert saved["events"][0]["parsed_action"]["proposal"]["terms"][0]["item_id"] == "A"
 
 
@@ -154,6 +156,8 @@ def test_model_config_column_migrates_existing_runs_table(tmp_path):
         event_columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
     assert {"condition_id", "model_config_json"} <= run_columns
     assert {"metadata_json", "round_number"} <= event_columns
+    assert "created_at" not in run_columns
+    assert "timestamp" not in event_columns
 
 
 def test_jsonl_export_preserves_details(tmp_path):
@@ -189,6 +193,7 @@ def test_jsonl_export_preserves_details(tmp_path):
     assert record["parsed_action"]["proposal"]["effective_prices"]["A"] == "99.5"
     assert record["validation_result"]["error_code"] == "CONDITION_NOT_SATISFIED"
     assert record["round_number"] == 1
+    assert "timestamp" not in record
 
 
 def test_decimal_prices_are_json_serializable_in_public_transcript():

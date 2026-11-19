@@ -164,6 +164,23 @@ def test_llm_metadata_logging(tmp_path):
         assert not {"prompt", "feedback", "api_key"} & event.metadata.keys()
     saved = load_run_from_sqlite("e2e-3", tmp_path / "runs.db")
     assert saved["events"][0]["metadata"]["model_version"] == "mock"
+    prompt_rows = saved["prompts"]
+    assert len(prompt_rows) == len(action_events)
+    assert [row["event_id"] for row in prompt_rows] == [event.event_id for event in action_events]
+    assert [row["role"] for row in prompt_rows] == [event.actor for event in action_events]
+    assert prompt_rows[0]["prompt"] == adapters["seller"].prompts[0]
+    assert prompt_rows[0]["action_schema"]["required"] == ["action_type"]
+    assert prompt_rows[0]["output"] == action_events[0].raw_output
+    assert "seller-secret-note" in json.dumps(prompt_rows[0]["prompt"])
+    assert "buyer-secret-note" not in json.dumps(prompt_rows[0]["prompt"])
+    seller_prompt_rows = [row for row in prompt_rows if row["role"] == "seller"]
+    assert len(seller_prompt_rows) == 2
+    assert seller_prompt_rows[1]["prompt"]
+    assert all(message["role"] != "system" for message in seller_prompt_rows[1]["prompt"])
+    assert "seller-secret-note" not in json.dumps(seller_prompt_rows[1]["prompt"])
+    with sqlite3.connect(tmp_path / "runs.db") as connection:
+        prompt_columns = {row[1] for row in connection.execute("PRAGMA table_info(prompts)")}
+    assert prompt_columns == {"run_id", "event_id", "role", "prompt", "action_schema", "output"}
     with sqlite3.connect(tmp_path / "runs.db") as connection:
         metadata_rows = connection.execute(
             "SELECT metadata_json FROM events WHERE metadata_json IS NOT NULL"

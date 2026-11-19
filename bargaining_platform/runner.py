@@ -23,11 +23,12 @@ class LLMAgent:
         self.adapter = adapter
         self.prompt_path = prompt_path if prompt_path is not None else default_prompt_path(role)
         self.messages = []
+        self.logged_message_count = 0
         self.transcript_count = 0
 
     def decide(
         self, state: GameState, action_schema: dict
-    ) -> tuple[Action | ValidationResult, str, GenerationResult]:
+    ) -> tuple[Action | ValidationResult, str, list[dict[str, str]], GenerationResult]:
         view = make_private_view(self.role, state)
         if not self.messages:
             background_view = {
@@ -50,10 +51,12 @@ class LLMAgent:
         logged_prompt = "\n\n".join(
             f"{message['role']}: {message['content']}" for message in self.messages
         )
+        new_messages = deepcopy(self.messages[self.logged_message_count:])
         generated = self.adapter.generate(self.messages, action_schema)
         self.messages.append({"role": "assistant", "content": generated.text})
+        self.logged_message_count = len(self.messages)
         self.transcript_count = len(view["public_transcript"])
-        return parse_action(generated.text, self.role), logged_prompt, generated
+        return parse_action(generated.text, self.role), logged_prompt, new_messages, generated
 
     def report_validation(self, result: ValidationResult) -> None:
         self.messages.append({
@@ -95,6 +98,7 @@ def run_llm_negotiation(
         "buyer": LLMAgent("buyer", role_adapters["buyer"], buyer_prompt_path),
     }
     persisted_model_config = deepcopy(model_config or {"version": None, "roles": {}})
+    prompt_records = []
     persisted_model_config.setdefault("roles", {})
     for role, agent in agents.items():
         role_config = persisted_model_config["roles"].setdefault(
@@ -105,9 +109,17 @@ def run_llm_negotiation(
     while engine.state.outcome is None:
         role = engine.state.current_actor
         agent = agents[role]
-        parsed, prompt, generated = agent.decide(engine.state, _action_schema())
+        action_schema = _action_schema()
+        parsed, prompt, new_messages, generated = agent.decide(engine.state, action_schema)
         event_count = len(engine.event_logger.events)
         transcript_count = len(engine.state.public_transcript)
+        prompt_records.append({
+            "event_id": event_count + 1,
+            "role": role,
+            "prompt": new_messages,
+            "action_schema": action_schema,
+            "output": generated.text,
+        })
         result = engine.step(
             parsed,
             role=role,
@@ -163,6 +175,7 @@ def run_llm_negotiation(
         db_path,
         condition_id=condition_id,
         model_config=persisted_model_config,
+        prompts=prompt_records,
     )
     return engine
 

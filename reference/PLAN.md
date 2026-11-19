@@ -90,7 +90,7 @@ Implement merchandise utility and an extension point for multi-issue governmentâ
 
 ### T-302 â€” Implement event logging
 
-Persist raw model output, parsed action, public action, validation result, state transition, private decision summary, and timestamp per attempt.
+Persist raw model output, parsed action, public action, validation result, state transition, and private decision summary per attempt. Event order is determined by `event_id`; timestamps are not recorded.
 
 **Done when:** a run has a complete append-only event log.
 
