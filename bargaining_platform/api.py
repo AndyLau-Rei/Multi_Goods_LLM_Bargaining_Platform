@@ -274,6 +274,7 @@ def run_events(run_id: str) -> dict[str, Any]:
             "event_id": event["event_id"],
             "event_type": event["event_type"],
             "actor": event["actor"],
+            "round_number": event["round_number"],
         }
         if event["event_type"] == "ACTION_ATTEMPT":
             # Validation is used internally to identify committed actions only.

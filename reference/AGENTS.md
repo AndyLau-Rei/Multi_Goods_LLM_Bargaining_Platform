@@ -19,7 +19,7 @@ Build a reproducible platform in which two LLM agents negotiate over multiple pr
 - Keep private role profiles separate from the public scenario and transcript.
 - Never expose an agent's hidden costs, values, reservation utility, private notes, or validation details to the opponent.
 - Treat every model response as untrusted input. Validate schema, role permissions, item IDs, quantities, units, prices, conditions, inventory, and hard constraints in deterministic code.
-- Do not silently repair an invalid action. Allow one configurable retry, then terminate with an explicit `INVALID_ACTION` outcome.
+- Do not silently repair invalid agent output. Check its schema, log the attempt, and ask the same agent to correct it without a retry limit. Check private proposal constraints on acceptance; failed acceptance ends as `NO_DEAL`.
 - Do not interpret bundle conditions from free-form prose. Conditions must be typed data.
 
 ### Negotiation rules
@@ -29,7 +29,7 @@ Build a reproducible platform in which two LLM agents negotiate over multiple pr
 - Acceptance is atomic: it accepts every term and condition in the current proposal. Partial acceptance is disabled until its discount semantics are specified.
 - A bundle discount applies only when its required item or commitment is present in the same accepted proposal and satisfies its minimum quantity.
 - A discount may not violate the seller's item-level price floor, inventory, scenario cap, or legal constraints.
-- Stop on agreement, walk-away, invalid-action policy, or maximum rounds. Record both round count and model-call count.
+- Stop on agreement, walk-away, or maximum rounds. Record both round count and model-call count.
 - Use versioned scenario configuration. Do not fill omitted proposal values, scoring rows, utility weights, or legal rules with guesses.
 
 ### Engineering scope
@@ -49,7 +49,7 @@ The implementation is acceptable when all of the following hold:
 - A buyer can accept only the current proposal ID, and acceptance commits the full package atomically.
 - Invalid items, quantities, prices, conditions, inventory, and hard-constraint violations are rejected deterministically.
 - Each agent receives only its private profile, permitted public catalog data, current proposal, and public transcript.
-- Maximum-round, walk-away, invalid-action, and no-deal outcomes are persisted.
+- Maximum-round, walk-away, and no-deal outcomes are persisted; invalid attempts are logged without ending a run.
 - A completed run can be replayed from versioned configuration and its action log.
 - Metrics include agreement rate, joint and role-specific utility, constraint compliance, rounds, concessions, bundle frequency, discount size, retries, and termination reason.
 - A deterministic test suite covers normal trade, no-deal, bundle success, missing bundle item, invalid discount, stale proposal ID, excess quantity, and private-information leakage.

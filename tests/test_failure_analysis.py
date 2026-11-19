@@ -32,6 +32,7 @@ def test_invalid_action_report_links_actor_and_error(tmp_path):
     engine.step(Action("PROPOSE", proposal.proposal_id, proposal))
     engine.step(Action("ACCEPT", "stale-id"))
     engine.step(Action("ACCEPT", "stale-id"))
+    engine.step(Action("WALK_AWAY"))
     save_run_to_sqlite(
         "invalid", scenario, engine.state.outcome,
         engine.event_logger.events, tmp_path / "runs.db",
@@ -39,7 +40,7 @@ def test_invalid_action_report_links_actor_and_error(tmp_path):
 
     report = generate_failure_report("invalid", tmp_path / "runs.db")
 
-    assert report["outcome_status"] == "INVALID_ACTION"
+    assert report["outcome_status"] == "NO_DEAL"
     assert report["failures"][0]["actor"] == "buyer"
     assert report["failures"][0]["error_code"] == "STALE_PROPOSAL_ID"
     assert report["failures"][0]["event_id"] == 3

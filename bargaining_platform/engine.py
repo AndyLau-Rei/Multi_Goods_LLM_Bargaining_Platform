@@ -34,6 +34,7 @@ class NegotiationEngine:
         metadata: dict | None = None,
     ) -> GameState | ValidationResult:
         state = self.state
+        action_round = state.round_number
         if state.outcome is not None:
             raise RuntimeError("Negotiation has ended")
 
@@ -48,15 +49,15 @@ class NegotiationEngine:
         if raw_output is not None and isinstance(action, Action):
             action = deepcopy(action)
             if action.action_type in {"PROPOSE", "COUNTER"} and action.proposal is not None:
-                action.proposal.proposal_id = (
-                    action.proposal.proposal_id or f"proposal-{len(state.public_transcript) + 1}"
-                )
+                action.proposal.proposal_id = f"proposal-{len(state.public_transcript) + 1}"
                 action.proposal_id = (
                     state.active_proposal.proposal_id
                     if state.active_proposal is not None else action.proposal.proposal_id
                 )
             elif action.action_type == "ACCEPT" and state.active_proposal is not None:
                 action.proposal_id = state.active_proposal.proposal_id
+            elif action.action_type == "WALK_AWAY":
+                action.proposal_id = None
         result = (
             action
             if isinstance(action, ValidationResult)
@@ -79,6 +80,7 @@ class NegotiationEngine:
             validation_result=result.to_dict(),
             private_decision_summary=private_summary,
             metadata=metadata,
+            round_number=action_round,
         )
         state.private_attempt_log.append({
             "actor": actor,
@@ -96,26 +98,14 @@ class NegotiationEngine:
                 }
             ):
                 state.invalid_attempts = 0
+                state.outcome = Outcome("NO_DEAL")
                 self.action_count += 1
-                if self.action_count >= 2 * self.max_rounds:
-                    state.outcome = Outcome("MAX_ROUNDS")
-                    summary = "Maximum rounds reached"
-                else:
-                    state.current_actor = state.public_transcript[-1]["actor"]
-                    state.round_number = 1 + self.action_count // 2
-                    summary = f"Acceptance rejected; turn switched to {state.current_actor}"
                 self.event_logger.append(
-                    "STATE_TRANSITION", actor, state_transition_summary=summary,
+                    "STATE_TRANSITION", actor,
+                    state_transition_summary="Game ended: accepted proposal failed validation",
+                    round_number=action_round,
                 )
                 return result
-            state.invalid_attempts += 1
-            if state.invalid_attempts > 1:
-                state.outcome = Outcome("INVALID_ACTION")
-                self.event_logger.append(
-                    "STATE_TRANSITION",
-                    actor,
-                    state_transition_summary="Game ended: invalid action retry exhausted",
-                )
             return result
         state.invalid_attempts = 0
 
@@ -163,5 +153,6 @@ class NegotiationEngine:
             "STATE_TRANSITION",
             actor,
             state_transition_summary=transition_summary,
+            round_number=action_round,
         )
         return state

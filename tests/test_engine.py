@@ -95,6 +95,21 @@ def test_timeout():
     assert len(state.public_transcript) == 4
 
 
+def test_event_round_numbers_advance_only_after_two_valid_responses():
+    engine = _engine_with_feasible_reservations()
+    opening = _proposal("offer-1")
+    counter = _proposal("offer-2")
+
+    engine.step(Action("PROPOSE", opening.proposal_id, opening))
+    invalid = engine.step(Action("ACCEPT", "stale-id"))
+    assert invalid.error_code == "STALE_PROPOSAL_ID"
+    engine.step(Action("COUNTER", opening.proposal_id, counter))
+    engine.step(Action("ACCEPT", counter.proposal_id))
+
+    events = engine.event_logger.events
+    assert [event.round_number for event in events] == [1, 1, 1, 1, 1, 2, 2]
+
+
 def test_offer_is_snapshotted_before_acceptance():
     engine = _engine_with_feasible_reservations()
     offer = _proposal("offer-1")

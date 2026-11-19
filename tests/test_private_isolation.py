@@ -50,7 +50,7 @@ def test_views_contain_detached_public_state_without_private_summary():
 
     for view in (buyer_view, seller_view):
         assert view["catalog"] == state.catalog
-        assert view["active_proposal"]["proposal_id"] == "offer-1"
+        assert "proposal_id" not in json.dumps(view)
         assert view["public_transcript"]
         assert view["remaining_rounds"] == 8
         assert "decision_summary" not in view["active_proposal"]
@@ -58,12 +58,13 @@ def test_views_contain_detached_public_state_without_private_summary():
 
     buyer_view["private_profile"]["budget"] = 0
     buyer_view["catalog"][0]["id"] = "changed"
-    buyer_view["active_proposal"]["proposal_id"] = "changed"
+    buyer_view["active_proposal"]["terms"][0]["unit_price"] = 0
     buyer_view["public_transcript"][0]["actor"] = "changed"
 
     assert state.private_profiles["buyer"]["budget"] == 200
     assert state.catalog[0]["id"] == "A"
     assert state.active_proposal.proposal_id == "offer-1"
+    assert state.active_proposal.terms[0].unit_price == 120
     assert state.public_transcript[0]["actor"] == "seller"
 
 

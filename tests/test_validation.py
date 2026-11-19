@@ -121,17 +121,19 @@ def test_retry_policy_allows_one_invalid_action():
     assert len(valid.private_attempt_log) == 2
 
 
-def test_retry_exhaustion_terminates():
+def test_repeated_invalid_actions_do_not_end_or_count_against_the_game():
     engine = _engine()
     offer = _proposal("offer-1")
     engine.step(Action("PROPOSE", offer.proposal_id, offer, actor="buyer"))
     result = engine.step(Action("PROPOSE", offer.proposal_id, offer, actor="buyer"))
 
     assert result.error_code == "WRONG_TURN"
-    assert engine.state.outcome.status == "INVALID_ACTION"
+    assert engine.state.outcome is None
+    assert engine.state.invalid_attempts == 0
     assert engine.state.active_proposal is None
     assert engine.state.public_transcript == []
     assert len(engine.state.private_attempt_log) == 2
+    assert not any(event.event_type == "STATE_TRANSITION" for event in engine.event_logger.events)
 
 
 def test_conditional_offer_is_supported():
@@ -174,7 +176,7 @@ def test_acceptance_rejects_unmet_or_missing_reservation():
 
     assert result.error_code == "RESERVATION_UTILITY_NOT_MET"
     assert "100" not in result.message and "150" not in result.message
-    assert engine.state.outcome is None
+    assert engine.state.outcome.status == "NO_DEAL"
 
     engine = _engine()
     engine.step(Action("PROPOSE", offer.proposal_id, offer))

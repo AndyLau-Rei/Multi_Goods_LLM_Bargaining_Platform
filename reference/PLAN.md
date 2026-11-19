@@ -32,7 +32,7 @@ Implement seller-first alternating turns, active proposal replacement, atomic ac
 
 ### T-102 — Implement action validation
 
-Validate action type, actor, proposal ID, item IDs, quantities, units, permitted terms, and turn ownership. Add one retry and `INVALID_ACTION` termination.
+Validate agent output against the action schema, including a required `decision_summary` on proposals. Log invalid output and request correction from the same agent without a retry limit. Check private proposal constraints on acceptance and end failed acceptance as `NO_DEAL`.
 
 **Done when:** invalid actions never mutate authoritative state and every attempt is logged.
 

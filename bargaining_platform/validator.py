@@ -58,7 +58,6 @@ def parse_action(raw_text: str, role: str) -> Action | ValidationResult:
         proposal.setdefault("proposal_id", None)
         proposal.setdefault("acceptance_mode", "all_or_nothing")
         proposal.setdefault("conditions", [])
-        proposal.setdefault("decision_summary", "")
         proposal.setdefault("original_prices", prices)
         proposal.setdefault("effective_prices", prices.copy())
     action_data["actor"] = role
@@ -90,7 +89,7 @@ def _validate_action_shape(data: dict) -> ValidationResult | None:
 
 
 def _validate_proposal_shape(proposal: dict) -> ValidationResult | None:
-    if set(proposal) - _PROPOSAL_KEYS or "terms" not in proposal:
+    if set(proposal) - _PROPOSAL_KEYS or not {"terms", "decision_summary"} <= set(proposal):
         return ValidationResult(
             False, "SCHEMA_VIOLATION", "Proposal fields are incomplete or unexpected"
         )

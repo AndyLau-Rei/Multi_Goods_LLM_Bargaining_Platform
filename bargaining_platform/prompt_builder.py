@@ -34,11 +34,15 @@ def make_private_view(role: str, state: GameState) -> dict:
     if state.active_proposal is not None:
         active_proposal = deepcopy(json_safe(state.active_proposal.to_dict()))
         active_proposal.pop("decision_summary", None)
+        active_proposal.pop("proposal_id", None)
 
     transcript = deepcopy(state.public_transcript)
     for entry in transcript:
+        if isinstance(entry, dict):
+            entry.pop("proposal_id", None)
         if isinstance(entry, dict) and isinstance(entry.get("proposal"), dict):
             entry["proposal"].pop("decision_summary", None)
+            entry["proposal"].pop("proposal_id", None)
 
     return {
         "role": role,
@@ -68,12 +72,10 @@ def render_prompt(
     )
     action_schema = {
         "action_type": "PROPOSE | COUNTER | ACCEPT | WALK_AWAY",
-        "proposal_id": "optional; the platform supplies or resolves it",
         "proposal": "price/package object for PROPOSE/COUNTER, otherwise null",
     }
     example = {
         "action_type": "ACCEPT",
-        "proposal_id": "current-proposal-id",
         "proposal": None,
     }
     selected_template = Path(template_path) if template_path is not None else default_prompt_path(role)

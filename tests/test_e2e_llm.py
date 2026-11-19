@@ -72,7 +72,7 @@ def test_e2e_llm_retry_on_bad_json(tmp_path):
     assert engine.event_logger.events[0].validation_result["error_code"] == "SCHEMA_VIOLATION"
 
 
-def test_id_free_exploratory_offer_can_be_revised_after_rejected_acceptance(tmp_path):
+def test_id_free_offer_below_private_floor_fails_on_acceptance(tmp_path):
     proposal = _proposal()
     proposal["terms"][0]["unit_price"] = 79
     proposal["terms"][1]["unit_price"] = 60
@@ -97,14 +97,14 @@ def test_id_free_exploratory_offer_can_be_revised_after_rejected_acceptance(tmp_
         _scenario(), adapters, run_id="id-free-revision", db_path=tmp_path / "runs.db"
     )
 
-    assert engine.state.outcome.status == "AGREEMENT"
-    assert engine.state.outcome.final_proposal_id == "proposal-2"
+    assert engine.state.outcome.status == "NO_DEAL"
+    assert engine.state.outcome.final_proposal_id is None
     assert any(
         event.validation_result.get("error_code") == "PRICE_BELOW_FLOOR"
         for event in engine.event_logger.events
         if event.event_type == "ACTION_ATTEMPT"
     )
-    assert replay_run("id-free-revision", tmp_path / "runs.db").outcome.status == "AGREEMENT"
+    assert replay_run("id-free-revision", tmp_path / "runs.db").outcome.status == "NO_DEAL"
 
 
 def test_llm_metadata_logging(tmp_path):
@@ -254,13 +254,10 @@ def test_runner_uses_separate_role_agents_and_prompt_contexts(tmp_path, monkeypa
 
 def test_role_history_is_incremental_and_decision_summaries_stay_private(tmp_path):
     seller_offer = _proposal()
-    seller_offer["proposal_id"] = "seller-offer"
     seller_offer["decision_summary"] = "seller private strategy"
     buyer_offer = _proposal()
-    buyer_offer["proposal_id"] = "seller-offer"
     buyer_offer["decision_summary"] = "buyer private strategy"
     seller_final = _proposal()
-    seller_final["proposal_id"] = "seller-offer"
     seller_final["decision_summary"] = "seller final private strategy"
 
     class CapturingAdapter(MockLLMAdapter):
@@ -273,12 +270,12 @@ def test_role_history_is_incremental_and_decision_summaries_stay_private(tmp_pat
             return super().generate(prompt, action_schema)
 
     seller = CapturingAdapter([
-        json.dumps({"action_type": "PROPOSE", "proposal_id": "seller-offer", "proposal": seller_offer}),
-        json.dumps({"action_type": "COUNTER", "proposal_id": "seller-offer", "proposal": seller_final}),
+        json.dumps({"action_type": "PROPOSE", "proposal": seller_offer}),
+        json.dumps({"action_type": "COUNTER", "proposal": seller_final}),
     ])
     buyer = CapturingAdapter([
-        json.dumps({"action_type": "COUNTER", "proposal_id": "seller-offer", "proposal": buyer_offer}),
-        json.dumps({"action_type": "ACCEPT", "proposal_id": "seller-offer"}),
+        json.dumps({"action_type": "COUNTER", "proposal": buyer_offer}),
+        json.dumps({"action_type": "ACCEPT"}),
     ])
 
     engine = run_llm_negotiation(
@@ -296,12 +293,12 @@ def test_role_history_is_incremental_and_decision_summaries_stay_private(tmp_pat
     seller_context = json.dumps(seller.prompts[1])
     assert "buyer private strategy" not in seller_context
     assert "seller private strategy" in seller_context
-    assert "seller-offer" in seller.prompts[1][-1]["content"]
+    assert "proposal_id" not in seller.prompts[1][-1]["content"]
     assert "decision_summary" not in seller.prompts[1][-1]["content"]
     buyer_context = json.dumps(buyer.prompts[0])
     assert "seller private strategy" not in buyer_context
     assert "buyer private strategy" not in buyer_context
-    assert "seller-offer" in buyer_context
+    assert "proposal_id" not in buyer_context
     assert all(
         "decision_summary" not in message["content"]
         for message in buyer.prompts[0]

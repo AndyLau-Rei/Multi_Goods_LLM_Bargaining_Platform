@@ -28,6 +28,7 @@ class Event:
     state_transition_summary: str | None = None
     private_decision_summary: str | None = None
     metadata: dict | None = None
+    round_number: int = 1
 
     def to_dict(self) -> dict:
         return json_safe(asdict(self))
@@ -54,6 +55,7 @@ class EventLogger:
         state_transition_summary: str | None = None,
         private_decision_summary: str | None = None,
         metadata: dict | None = None,
+        round_number: int = 1,
     ) -> Event:
         event = Event(
             event_id=len(self._events) + 1,
@@ -78,6 +80,7 @@ class EventLogger:
             metadata=(
                 json_safe(deepcopy(metadata)) if metadata is not None else None
             ),
+            round_number=round_number,
         )
         self._events.append(event)
         return deepcopy(event)
@@ -114,6 +117,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             state_transition_summary TEXT,
             private_decision_summary TEXT,
             metadata_json TEXT,
+            round_number INTEGER,
             PRIMARY KEY (run_id, event_id),
             FOREIGN KEY (run_id) REFERENCES runs(run_id)
         );
@@ -127,6 +131,8 @@ def _create_schema(connection: sqlite3.Connection) -> None:
     columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
     if "metadata_json" not in columns:
         connection.execute("ALTER TABLE events ADD COLUMN metadata_json TEXT")
+    if "round_number" not in columns:
+        connection.execute("ALTER TABLE events ADD COLUMN round_number INTEGER")
 
 
 def save_run_to_sqlite(
@@ -172,8 +178,9 @@ def save_run_to_sqlite(
                 INSERT INTO events
                     (run_id, event_id, timestamp, event_type, actor,
                      raw_output_json, parsed_action_json, validation_result_json,
-                     state_transition_summary, private_decision_summary, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     state_transition_summary, private_decision_summary, metadata_json,
+                     round_number)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     (
@@ -192,6 +199,7 @@ def save_run_to_sqlite(
                         event.state_transition_summary,
                         event.private_decision_summary,
                         _json_text(event.metadata) if event.metadata is not None else None,
+                        event.round_number,
                     )
                     for event in events
                 ),
@@ -239,6 +247,7 @@ def load_run_from_sqlite(
                 "state_transition_summary": row["state_transition_summary"],
                 "private_decision_summary": row["private_decision_summary"],
                 "metadata": decode(row["metadata_json"]),
+                "round_number": row["round_number"],
             }
             for row in event_rows
         ],
@@ -321,7 +330,8 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
                         event["event_id"] + 1 in transitions_by_id
                         and transitions_by_id[event["event_id"] + 1]["state_transition_summary"]
                         in {"Maximum rounds reached", "Acceptance rejected; turn switched to seller",
-                            "Acceptance rejected; turn switched to buyer"}
+                                "Acceptance rejected; turn switched to buyer",
+                                "Game ended: accepted proposal failed validation"}
                     )
                 )
                 if legacy_acceptance_rejection:
@@ -339,6 +349,19 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
                     if legacy_budget_rejection else action,
                     role=event["actor"],
                 )
+                legacy_retry_transition = transitions_by_id.get(event["event_id"] + 1)
+                if (
+                    legacy_retry_transition is not None
+                    and legacy_retry_transition["state_transition_summary"]
+                    == "Game ended: invalid action retry exhausted"
+                    and engine.state.outcome is None
+                    and engine.event_logger.events[-1].event_type != "STATE_TRANSITION"
+                ):
+                    engine.state.outcome = Outcome("INVALID_ACTION")
+                    engine.event_logger.append(
+                        "STATE_TRANSITION", event["actor"],
+                        state_transition_summary="Game ended: invalid action retry exhausted",
+                    )
         except Exception as exc:
             raise ReplayDivergenceError(
                 f"Replay failed at event {event['event_id']}"
@@ -352,6 +375,11 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
         )
         if replay_attempt.validation_result != event["validation_result"]:
             raise ReplayDivergenceError(f"Validation diverged at event {event['event_id']}")
+        if (
+            event.get("round_number") is not None
+            and replay_attempt.round_number != event["round_number"]
+        ):
+            raise ReplayDivergenceError(f"Round number diverged at event {event['event_id']}")
         if replay_attempt.validation_result and replay_attempt.validation_result.get("ok"):
             valid_actions.append(event)
 
@@ -362,6 +390,11 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
             if replay_events[-1].state_transition_summary != expected:
                 raise ReplayDivergenceError(
                     f"State transition diverged after event {event['event_id']}"
+                )
+            expected_round = transition_events[transitions_seen].get("round_number")
+            if expected_round is not None and replay_events[-1].round_number != expected_round:
+                raise ReplayDivergenceError(
+                    f"Round number diverged after event {event['event_id']}"
                 )
             transitions_seen += 1
 

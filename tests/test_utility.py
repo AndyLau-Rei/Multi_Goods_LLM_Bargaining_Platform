@@ -57,7 +57,7 @@ def test_reservation_utility_rejection():
     result = engine.step(Action("ACCEPT", proposal.proposal_id))
 
     assert result.error_code == "RESERVATION_UTILITY_NOT_MET"
-    assert engine.state.outcome is None
+    assert engine.state.outcome.status == "NO_DEAL"
     assert len(engine.state.public_transcript) == 1
 
 

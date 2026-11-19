@@ -80,6 +80,7 @@ def test_in_progress_status_and_events(monkeypatch):
         "event_id": 2,
         "event_type": "STATE_TRANSITION",
         "actor": "seller",
+        "round_number": 2,
         "state_transition_summary": "Proposal updated",
     }
     monkeypatch.setattr(api_module, "_active_runs", {
@@ -359,7 +360,7 @@ def test_api_round_display_with_retries(tmp_path, monkeypatch):
                 "action_type": "PROPOSE", "proposal_id": "retry-round",
                 "proposal": proposal,
             }),
-            "bad", "still bad",
+            "bad", "still bad", json.dumps({"action_type": "WALK_AWAY"}),
         ]),
         "buyer": MockLLMAdapter([
             json.dumps({
@@ -377,19 +378,46 @@ def test_api_round_display_with_retries(tmp_path, monkeypatch):
     assert response.json()["round_number"] == 2
 
 
-def test_api_empty_action_shows_transitions(tmp_path, monkeypatch):
+def test_api_schema_corrections_do_not_emit_false_terminal_transition(tmp_path, monkeypatch):
     monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
     scenario = load_scenario("scenarios/shop_bundle.json")
-    adapters = {"seller": MockLLMAdapter(["bad", "still bad"]), "buyer": MockLLMAdapter([])}
+    proposal = {
+        "acceptance_mode": "all_or_nothing",
+        "terms": [{"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"}],
+        "conditions": [], "decision_summary": "Opening offer",
+    }
+    adapters = {
+        "seller": MockLLMAdapter([
+            "bad", "still bad",
+            json.dumps({"action_type": "PROPOSE", "proposal": proposal}),
+        ]),
+        "buyer": MockLLMAdapter([json.dumps({"action_type": "WALK_AWAY"})]),
+    }
     run_llm_negotiation(
         scenario, adapters, run_id="empty-actions",
         db_path=tmp_path / "runs.db", mock_demo=True,
     )
     response = TestClient(app).get("/runs/empty-actions/events")
     assert response.status_code == 200
-    assert not any(event["event_type"] == "ACTION_ATTEMPT" for event in response.json()["events"])
-    assert any(
-        event["event_type"] == "STATE_TRANSITION"
-        and event["state_transition_summary"] == "Game ended: invalid action retry exhausted"
+    public_actions = [
+        event for event in response.json()["events"]
+        if event["event_type"] == "ACTION_ATTEMPT"
+    ]
+    assert len(public_actions) == 2
+    assert [event["public_transcript"]["action_type"] for event in public_actions] == [
+        "PROPOSE", "WALK_AWAY",
+    ]
+    attempts = load_run_from_sqlite("empty-actions", tmp_path / "runs.db")["events"]
+    invalid_attempts = [
+        event for event in attempts
+        if event["event_type"] == "ACTION_ATTEMPT"
+        and not event["validation_result"]["ok"]
+    ]
+    assert len(invalid_attempts) == 2
+    assert [event["validation_result"]["error_code"] for event in invalid_attempts] == [
+        "MALFORMED_JSON", "MALFORMED_JSON",
+    ]
+    assert all(
+        event.get("state_transition_summary") != "Game ended: invalid action retry exhausted"
         for event in response.json()["events"]
     )

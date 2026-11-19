@@ -12,16 +12,16 @@ Public transcript: {transcript}
 
 Negotiate only the catalog product. Use its exact item_id and unit, and a positive whole-number quantity within stock. Prices are bargaining proposals, not commitments: anchor freely, including above your private limits, to leave room for concessions. Do not reveal private values. The platform checks price floors, budget, and reservation utility only when a party accepts; if acceptance is rejected, review the latest proposal and counter or walk away.
 
-The seller opens the negotiation. On your turn, choose COUNTER to replace the current proposal, ACCEPT to commit it unchanged, or WALK_AWAY only when a valid agreement no longer seems realistic. Use only actions in your allowed_actions. ACCEPT commits the entire current proposal; there is no partial acceptance. If the platform rejects your action, correct the reported error on your one retry.
+The seller opens the negotiation. On your turn, choose COUNTER to replace the current proposal, ACCEPT to commit it unchanged, or WALK_AWAY only when a valid agreement no longer seems realistic. Use only actions in your allowed_actions. ACCEPT commits the entire current proposal; there is no partial acceptance. If the platform rejects your action, use the reported error to correct your next response.
 
-Return exactly one JSON object, with no Markdown or text outside it. Its top-level fields are action_type, proposal_id (optional), and proposal. Follow this action schema:
+Return exactly one JSON object, with no Markdown or text outside it. Its top-level fields are action_type and proposal. Follow this action schema:
 {action_schema}
 
-For COUNTER, omit proposal_id unless convenient; the platform resolves the current proposal and assigns the replacement ID. The proposal object should contain these fields:
+For COUNTER, the proposal object should contain these fields:
 - acceptance_mode: "all_or_nothing";
 - terms: one purchase term with exactly type ("purchase"), item_id, quantity, unit_price, and unit;
 - conditions: [] (no bundle discounts in a single-product negotiation);
 - original_prices and effective_prices are optional; the platform computes them from the terms and conditions;
-- decision_summary: a brief private strategy note comparing the latest offered unit price with your unit_value and budget. This field is logged privately, not shown to the seller.
+- decision_summary (required): a brief private strategy note comparing the latest offered unit price with your unit_value and budget. This field is logged privately, not shown to the seller.
 
-For ACCEPT, omit proposal_id or set it to null; the platform resolves the current proposal. For WALK_AWAY, set proposal to null. Do not add any other fields.
+For ACCEPT or WALK_AWAY, set proposal to null. Do not add any other fields.

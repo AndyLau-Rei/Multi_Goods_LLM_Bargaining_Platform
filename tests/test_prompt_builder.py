@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from bargaining_platform.engine import NegotiationEngine
@@ -53,8 +55,57 @@ def test_prompt_includes_json_instructions():
     for action_type in ("PROPOSE", "COUNTER", "ACCEPT", "WALK_AWAY"):
         assert action_type in prompt
     assert '"action_type"' in prompt
-    assert '"proposal_id"' in prompt
+    assert "proposal_id" not in prompt
     assert "proposal to null" in prompt
+
+
+def test_model_facing_schema_and_turn_updates_omit_proposal_ids():
+    from bargaining_platform.prompt_builder import render_public_update
+    from bargaining_platform.runner import _action_schema
+
+    engine = NegotiationEngine(load_scenario("scenarios/test_scenario.json"))
+    proposal = {
+        "proposal_id": "internal-1",
+        "acceptance_mode": "all_or_nothing",
+        "terms": [{
+            "type": "purchase", "item_id": "A", "quantity": 1,
+            "unit_price": 100, "unit": "piece",
+        }],
+        "conditions": [],
+        "decision_summary": "private",
+        "original_prices": {"A": 100},
+        "effective_prices": {"A": 100},
+    }
+    engine.step(
+        json.dumps({"action_type": "PROPOSE", "proposal": proposal}),
+        role="seller",
+    )
+    view = make_private_view("buyer", engine.state)
+    update = render_public_update(view, 0)
+    schema = _action_schema()
+
+    assert "proposal_id" not in json.dumps(schema)
+    assert schema["properties"]["proposal"]["additionalProperties"] is False
+    assert "proposal_id" not in json.dumps(view)
+    assert "proposal_id" not in update
+    assert "internal-1" not in update
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "prompts/seller_single.txt",
+        "prompts/buyer_single.txt",
+        "prompts/seller_multi.txt",
+        "prompts/buyer_multi.txt",
+    ],
+)
+def test_active_prompt_templates_never_mention_proposal_ids(template):
+    seller_view, buyer_view = _views()
+    role = "seller" if "seller" in template else "buyer"
+    view = seller_view if role == "seller" else buyer_view
+
+    assert "proposal_id" not in render_prompt(role, view, template_path=template)
 
 
 def test_custom_prompt_template():

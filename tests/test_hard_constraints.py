@@ -47,7 +47,7 @@ def test_allows_price_below_floor_until_acceptance():
     assert engine.state.current_actor == "buyer"
 
 
-def test_invalid_acceptance_returns_to_proposer_for_revision():
+def test_invalid_acceptance_ends_negotiation_without_revealing_floor():
     engine = _engine()
     opening = _proposal("opening")
     counter = _proposal("counter")
@@ -60,8 +60,7 @@ def test_invalid_acceptance_returns_to_proposer_for_revision():
     result = engine.step(Action("ACCEPT", counter.proposal_id))
 
     assert result.error_code == "PRICE_BELOW_FLOOR"
-    assert engine.state.outcome is None
-    assert engine.state.current_actor == "buyer"
+    assert engine.state.outcome.status == "NO_DEAL"
     assert engine.state.active_proposal.proposal_id == "counter"
 
 
@@ -86,8 +85,7 @@ def test_seller_offer_above_buyer_budget_is_public_but_acceptance_is_rejected():
     assert rejected.error_code == "BUDGET_EXCEEDED"
     assert "1300" not in rejected.message
     assert "1300" not in str(engine.state.public_transcript)
-    assert engine.state.outcome is None
-    assert engine.state.current_actor == "seller"
+    assert engine.state.outcome.status == "NO_DEAL"
     assert len(engine.state.public_transcript) == 1
 
 
@@ -111,7 +109,7 @@ def test_seller_acceptance_does_not_reveal_buyer_budget():
     assert rejected.error_code == "ACCEPTANCE_REQUIREMENTS_NOT_MET"
     assert "budget" not in rejected.message.lower()
     assert "1300" not in rejected.message
-    assert engine.state.outcome is None
+    assert engine.state.outcome.status == "NO_DEAL"
 
 
 def test_rejects_unowned_catalog_item():
@@ -144,6 +142,5 @@ def test_acceptance_rechecks_hard_constraints():
     result = engine.step(Action("ACCEPT", offer.proposal_id))
 
     assert result.error_code == "INSUFFICIENT_STOCK"
-    assert engine.state.outcome is None
-    assert engine.state.current_actor == "seller"
+    assert engine.state.outcome.status == "NO_DEAL"
     assert len(engine.state.public_transcript) == 1

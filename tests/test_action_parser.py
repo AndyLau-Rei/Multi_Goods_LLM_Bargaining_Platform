@@ -76,23 +76,38 @@ def test_reject_extra_fields():
     assert result.ok is False
 
 
-def test_parse_error_is_logged_and_uses_existing_retry_policy():
+def test_parse_error_is_logged_without_counting_a_retry():
     engine = NegotiationEngine(load_scenario("scenarios/shop_bundle.json"))
     raw_text = '{"action_type":"PROPOSE",'
 
     result = engine.step(raw_text, role="seller")
 
     assert result.error_code == "MALFORMED_JSON"
-    assert engine.state.invalid_attempts == 1
+    assert engine.state.invalid_attempts == 0
     assert engine.state.active_proposal is None
+    assert len(engine.event_logger.events) == 1
+    assert engine.event_logger.events[0].event_type == "ACTION_ATTEMPT"
     event = engine.event_logger.events[0]
     assert event.raw_output == raw_text
     assert event.parsed_action is None
     assert event.validation_result["error_code"] == "MALFORMED_JSON"
 
 
-def test_model_can_omit_or_misstate_proposal_ids():
-    engine = NegotiationEngine(load_scenario("scenarios/shop_bundle.json"))
+def test_proposal_requires_decision_summary():
+    proposal = _proposal_payload()
+    del proposal["decision_summary"]
+
+    result = parse_action(json.dumps({"action_type": "PROPOSE", "proposal": proposal}), "seller")
+
+    assert isinstance(result, ValidationResult)
+    assert result.error_code == "SCHEMA_VIOLATION"
+
+
+def test_id_free_propose_counter_and_accept_use_internal_proposal_ids():
+    scenario = load_scenario("scenarios/shop_bundle.json")
+    for profile in scenario["private_profiles"].values():
+        profile["reservation_utility"] = 0
+    engine = NegotiationEngine(scenario)
     proposal = _proposal_payload()
     proposal.pop("proposal_id")
     proposal.pop("original_prices")
@@ -103,15 +118,22 @@ def test_model_can_omit_or_misstate_proposal_ids():
         role="seller",
     )
     assert first.active_proposal.proposal_id == "proposal-1"
+    assert first.public_transcript[-1]["proposal_id"] == "proposal-1"
+    assert first.public_transcript[-1]["proposal"]["proposal_id"] == "proposal-1"
 
     proposal["terms"][0]["unit_price"] = 110
     second = engine.step(
         json.dumps({
             "action_type": "COUNTER",
-            "proposal_id": "stale-model-id",
             "proposal": proposal,
         }),
         role="buyer",
     )
     assert second.active_proposal.proposal_id == "proposal-2"
     assert second.invalid_attempts == 0
+    assert second.public_transcript[-1]["proposal_id"] == "proposal-1"
+    assert second.public_transcript[-1]["proposal"]["proposal_id"] == "proposal-2"
+
+    accepted = engine.step(json.dumps({"action_type": "ACCEPT"}), role="seller")
+    assert accepted.outcome.final_proposal_id == "proposal-2"
+    assert accepted.public_transcript[-1]["proposal_id"] == "proposal-2"

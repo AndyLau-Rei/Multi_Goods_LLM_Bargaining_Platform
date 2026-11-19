@@ -121,16 +121,16 @@ Recommended transition:
 2. The other party may accept the complete active proposal, counter with a complete replacement, or walk away.
 3. A counteroffer becomes the only active proposal and the other party acts next.
 4. Acceptance is valid only for the current proposal ID and commits all terms together.
-5. Stop on acceptance, walk-away, invalid-action policy, or the configured round limit.
+5. Stop on acceptance, walk-away, or the configured round limit.
 
 Define one round as one valid proposal/response pair and persist action count as well. Treat each model call as untrusted input:
 
 - Validate schema, role permissions, item IDs, quantities, units, allowed terms, and bundle conditions.
 - Do not silently repair invalid proposals.
-- Return a short machine-readable error for one retry; if it fails again, terminate as INVALID_ACTION.
+- Return a short machine-readable error and ask the same agent to correct invalid output without a retry limit. Proposal schema requires `decision_summary`.
 - Log every attempt, including rejected actions, without exposing private constraints.
 
-At final acceptance, check the accepting role's hard constraints and reservation utility. If acceptance violates them, do not commit the agreement; record the attempted violation and end or allow one explicit retry based on experiment configuration. Never disclose the other party's private bound in an error message.
+At final acceptance, check both roles' hard constraints and reservation utility. If acceptance violates them, do not commit the agreement; record the attempted violation and end as `NO_DEAL`. Never disclose the other party's private bound in an error message.
 
 ## 7. Utility and outcomes
 

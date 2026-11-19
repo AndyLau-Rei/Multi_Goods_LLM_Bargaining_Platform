@@ -145,6 +145,7 @@ def run_llm_negotiation(
                     "event_id": event.event_id,
                     "event_type": event.event_type,
                     "actor": event.actor,
+                    "round_number": event.round_number,
                 }
                 if event.event_type == "ACTION_ATTEMPT" and event.validation_result["ok"]:
                     record["public_transcript"] = deepcopy(next(public_actions))
@@ -185,7 +186,6 @@ def _prompt_version(prompt_path: str | Path) -> str:
 def default_mock_adapters() -> dict[str, MockLLMAdapter]:
     """Return deterministic role queues for local, network-free demonstrations."""
     standalone = {
-        "proposal_id": "mock-a",
         "acceptance_mode": "all_or_nothing",
         "terms": [
             {"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"},
@@ -196,7 +196,6 @@ def default_mock_adapters() -> dict[str, MockLLMAdapter]:
         "effective_prices": {"A": 120},
     }
     bundle = {
-        "proposal_id": "mock-a",
         "acceptance_mode": "all_or_nothing",
         "terms": [
             {"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"},
@@ -217,12 +216,12 @@ def default_mock_adapters() -> dict[str, MockLLMAdapter]:
     }
     return {
         "seller": MockLLMAdapter([
-            json.dumps({"action_type": "PROPOSE", "proposal_id": "mock-a", "proposal": standalone}),
-            json.dumps({"action_type": "COUNTER", "proposal_id": "mock-a", "proposal": bundle}),
+            json.dumps({"action_type": "PROPOSE", "proposal": standalone}),
+            json.dumps({"action_type": "COUNTER", "proposal": bundle}),
         ]),
         "buyer": MockLLMAdapter([
-            json.dumps({"action_type": "COUNTER", "proposal_id": "mock-a", "proposal": bundle}),
-            json.dumps({"action_type": "ACCEPT", "proposal_id": "mock-a"}),
+            json.dumps({"action_type": "COUNTER", "proposal": bundle}),
+            json.dumps({"action_type": "ACCEPT"}),
         ]),
     }
 
@@ -237,11 +236,11 @@ def _action_schema() -> dict:
                 "type": "string",
                 "enum": ["PROPOSE", "COUNTER", "ACCEPT", "WALK_AWAY"],
             },
-            "proposal_id": {"type": ["string", "null"]},
             "proposal": {
                 "type": ["object", "null"],
+                "additionalProperties": False,
+                "required": ["terms", "decision_summary"],
                 "properties": {
-                    "proposal_id": {"type": ["string", "null"]},
                     "acceptance_mode": {"type": "string", "enum": ["all_or_nothing"]},
                     "terms": {"type": "array"},
                     "conditions": {"type": "array"},

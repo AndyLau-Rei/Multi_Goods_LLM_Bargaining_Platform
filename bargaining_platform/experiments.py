@@ -187,13 +187,12 @@ def _budget_safe_mock_adapters(scenario: dict) -> dict[str, MockLLMAdapter]:
     if budget < 80:
         return {
             "seller": MockLLMAdapter([
-                json.dumps({"action_type": "WALK_AWAY", "proposal_id": None})
+                json.dumps({"action_type": "WALK_AWAY"})
             ]),
             "buyer": MockLLMAdapter([]),
         }
     price = min(120, budget)
     proposal = {
-        "proposal_id": "experiment-a",
         "acceptance_mode": "all_or_nothing",
         "terms": [
             {
@@ -209,19 +208,17 @@ def _budget_safe_mock_adapters(scenario: dict) -> dict[str, MockLLMAdapter]:
     return {
         "seller": MockLLMAdapter([
             json.dumps({
-                "action_type": "PROPOSE", "proposal_id": "experiment-a",
-                "proposal": proposal,
+                "action_type": "PROPOSE", "proposal": proposal,
             })
         ]),
         "buyer": MockLLMAdapter([
-            json.dumps({"action_type": "ACCEPT", "proposal_id": "experiment-a"})
+            json.dumps({"action_type": "ACCEPT"})
         ]),
     }
 
 
 def _no_bundle_mock_adapters() -> dict[str, MockLLMAdapter]:
     proposal = {
-        "proposal_id": "baseline-a",
         "acceptance_mode": "all_or_nothing",
         "terms": [
             {"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"}
@@ -234,12 +231,11 @@ def _no_bundle_mock_adapters() -> dict[str, MockLLMAdapter]:
     return {
         "seller": MockLLMAdapter([
             json.dumps({
-                "action_type": "PROPOSE", "proposal_id": "baseline-a",
-                "proposal": proposal,
+                "action_type": "PROPOSE", "proposal": proposal,
             })
         ]),
         "buyer": MockLLMAdapter([
-            json.dumps({"action_type": "ACCEPT", "proposal_id": "baseline-a"})
+            json.dumps({"action_type": "ACCEPT"})
         ]),
     }
 
