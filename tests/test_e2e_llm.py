@@ -72,6 +72,128 @@ def test_e2e_llm_retry_on_bad_json(tmp_path):
     assert engine.event_logger.events[0].validation_result["error_code"] == "SCHEMA_VIOLATION"
 
 
+def test_invalid_outputs_are_private_until_a_valid_retry(tmp_path):
+    invalid_proposal = _proposal()
+    invalid_proposal["decision_summary"] = "retry-private-summary"
+    invalid_proposal["terms"][0]["type"] = "service"
+    valid_proposal = _proposal()
+    valid_proposal["decision_summary"] = "valid-private-summary"
+
+    class CapturingAdapter(MockLLMAdapter):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.prompts = []
+
+        def generate(self, prompt, action_schema):
+            self.prompts.append([dict(message) for message in prompt])
+            return super().generate(prompt, action_schema)
+
+    invalid_raw = '{"action_type":"PROPOSE",'
+    seller = CapturingAdapter([
+        invalid_raw,
+        json.dumps({"action_type": "PROPOSE", "proposal": invalid_proposal}),
+        json.dumps({"action_type": "PROPOSE", "proposal": valid_proposal}),
+    ])
+    buyer = CapturingAdapter([json.dumps({"action_type": "ACCEPT"})])
+
+    engine = run_llm_negotiation(
+        _scenario(),
+        {"seller": seller, "buyer": buyer},
+        run_id="private-invalid-retries",
+        db_path=tmp_path / "runs.db",
+    )
+
+    assert engine.state.outcome.status == "AGREEMENT"
+    assert [event.validation_result["error_code"] for event in engine.event_logger.events[:2]] == [
+        "MALFORMED_JSON", "INVALID_TERM_TYPE",
+    ]
+    assert engine.event_logger.events[0].raw_output == invalid_raw
+    assert engine.event_logger.events[0].validation_result == {
+        "ok": False,
+        "error_code": "MALFORMED_JSON",
+        "message": "Model output is not valid JSON",
+    }
+    assert engine.event_logger.events[1].private_decision_summary == "retry-private-summary"
+    assert engine.event_logger.events[2].private_decision_summary == "valid-private-summary"
+    correction = seller.prompts[1][-1]["content"]
+    assert correction == (
+        "Your previous action was rejected.\n"
+        "Error code: MALFORMED_JSON\n"
+        "Error message: Model output is not valid JSON\n"
+        "Correct the invalid fields and output exactly one valid JSON action."
+    )
+    assert "Error code: INVALID_TERM_TYPE" in seller.prompts[2][-1]["content"]
+    buyer_history = json.dumps(buyer.prompts)
+    assert invalid_raw not in buyer_history
+    assert "MALFORMED_JSON" not in buyer_history
+    assert "INVALID_TERM_TYPE" not in buyer_history
+    assert "retry-private-summary" not in buyer_history
+    assert "valid-private-summary" not in buyer_history
+    public = json.dumps(engine.state.public_transcript)
+    assert "service" not in public
+    assert "retry-private-summary" not in public
+    assert "valid-private-summary" not in public
+    assert len(engine.state.public_transcript) == 2
+    assert engine.state.public_transcript[0]["action_type"] == "PROPOSE"
+
+
+def test_invalid_output_retry_exhaustion_ends_invalid_action(tmp_path):
+    seller = MockLLMAdapter(["bad one", "bad two", "bad three"])
+    buyer = MockLLMAdapter([])
+
+    engine = run_llm_negotiation(
+        _scenario(),
+        {"seller": seller, "buyer": buyer},
+        run_id="invalid-retry-exhaustion",
+        db_path=tmp_path / "runs.db",
+    )
+
+    assert engine.state.outcome.status == "INVALID_ACTION"
+    assert engine.state.public_transcript == []
+    assert [event.raw_output for event in engine.event_logger.events if event.event_type == "ACTION_ATTEMPT"] == [
+        "bad one", "bad two", "bad three",
+    ]
+    assert engine.event_logger.events[-1].state_transition_summary == (
+        "Game ended: invalid action retry exhausted"
+    )
+    assert replay_run("invalid-retry-exhaustion", tmp_path / "runs.db").outcome.status == "INVALID_ACTION"
+
+
+def test_retry_counter_resets_after_valid_action_and_replays_later_exhaustion(tmp_path):
+    proposal = _proposal()
+    seller = MockLLMAdapter([
+        json.dumps({"action_type": "PROPOSE", "proposal": proposal}),
+        "first invalid",
+        "second invalid",
+        "third invalid",
+    ])
+    buyer = MockLLMAdapter([
+        '{"action_type":"COUNTER",',
+        json.dumps({"action_type": "COUNTER", "proposal": proposal}),
+    ])
+
+    engine = run_llm_negotiation(
+        _scenario(),
+        {"seller": seller, "buyer": buyer},
+        run_id="reset-retry-exhaustion-round-2",
+        db_path=tmp_path / "runs.db",
+    )
+
+    assert engine.state.outcome.status == "INVALID_ACTION"
+    assert engine.state.invalid_attempts == 3
+    assert [
+        event.raw_output for event in engine.event_logger.events
+        if event.event_type == "ACTION_ATTEMPT"
+        and event.actor == "seller"
+        and not event.validation_result["ok"]
+    ] == ["first invalid", "second invalid", "third invalid"]
+    transition = engine.event_logger.events[-1]
+    assert transition.state_transition_summary == "Game ended: invalid action retry exhausted"
+    assert transition.round_number == 2
+    replayed = replay_run("reset-retry-exhaustion-round-2", tmp_path / "runs.db")
+    assert replayed.outcome.status == "INVALID_ACTION"
+
+
 def test_id_free_offer_below_private_floor_fails_on_acceptance(tmp_path):
     proposal = _proposal()
     proposal["terms"][0]["unit_price"] = 79
@@ -281,9 +403,11 @@ def test_role_history_is_incremental_and_decision_summaries_stay_private(tmp_pat
         def __init__(self, responses):
             super().__init__(responses)
             self.prompts = []
+            self.histories = []
 
         def generate(self, prompt, action_schema):
             self.prompts.append([dict(message) for message in prompt])
+            self.histories.append(prompt)
             return super().generate(prompt, action_schema)
 
     seller = CapturingAdapter([
@@ -304,6 +428,11 @@ def test_role_history_is_incremental_and_decision_summaries_stay_private(tmp_pat
 
     seller_instruction = seller.prompts[0][0]["content"]
     assert seller.prompts[1][0]["content"] == seller_instruction
+    assert sum(message["role"] == "system" for message in seller.prompts[0]) == 1
+    assert seller.prompts[0][1] == {
+        "role": "user",
+        "content": "Please make the opening proposal now. Output exactly one valid JSON action.",
+    }
     assert "seller private strategy" not in seller.prompts[0][0]["content"]
     assert sum(message["role"] == "system" for message in seller.prompts[1]) == 1
     assert sum(message["role"] == "user" for message in seller.prompts[1]) == 2
@@ -321,6 +450,36 @@ def test_role_history_is_incremental_and_decision_summaries_stay_private(tmp_pat
         for message in buyer.prompts[0]
         if message["role"] == "user"
     )
+    for role, history in (
+        ("buyer", buyer.prompts[0]), ("buyer", buyer.prompts[1]),
+        ("seller", seller.prompts[0]), ("seller", seller.prompts[1]),
+    ):
+        assert sum(message["role"] == "system" for message in history) == 1
+        assert "proposal_id" not in json.dumps(history)
+        opponent_summary = "seller private strategy" if role == "buyer" else "buyer private strategy"
+        assert opponent_summary not in json.dumps(history)
+
+    def forwarded_payload(history):
+        instruction = next(
+            message["content"] for message in reversed(history)
+            if message["role"] == "user" and "proposal" in message["content"].lower()
+        )
+        return json.loads(instruction.split("\n\n", 1)[1])
+
+    buyer_counter_payload = forwarded_payload(buyer.prompts[0])
+    assert buyer_counter_payload["action_type"] == "PROPOSE"
+    assert buyer_counter_payload["proposal"]["terms"] == seller_offer["terms"]
+    assert buyer_counter_payload["proposal"]["conditions"] == seller_offer["conditions"]
+    assert buyer_counter_payload["proposal"]["effective_prices"] == {"A": 120, "B": 60}
+    assert "decision_summary" not in json.dumps(buyer_counter_payload)
+
+    seller_counter_payload = forwarded_payload(seller.prompts[1])
+    buyer_echo_payload = forwarded_payload(buyer.histories[1])
+    assert seller_counter_payload == buyer_echo_payload
+    assert seller_counter_payload["action_type"] == "COUNTER"
+    assert seller_counter_payload["proposal"]["terms"] == buyer_offer["terms"]
+    assert seller_counter_payload["proposal"]["conditions"] == buyer_offer["conditions"]
+    assert "decision_summary" not in json.dumps(seller_counter_payload)
     assert "seller private strategy" not in json.dumps(engine.state.public_transcript)
     assert "buyer private strategy" not in json.dumps(engine.state.public_transcript)
     assert engine.state.outcome.status == "AGREEMENT"

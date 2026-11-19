@@ -101,3 +101,13 @@ def render_public_update(private_view: dict, transcript_start: int) -> str:
         "active_proposal": private_view["active_proposal"],
         "new_public_actions": private_view["public_transcript"][transcript_start:],
     })
+
+
+def render_platform_instruction(public_action: dict | None = None) -> str:
+    """Render a platform message for the opening turn or a public proposal."""
+    if public_action is None:
+        return "Please make the opening proposal now. Output exactly one valid JSON action."
+    return (
+        "The following proposal is now public. Review it and choose "
+        "COUNTER, ACCEPT, or WALK_AWAY.\n\n" + _prompt_json(public_action)
+    )

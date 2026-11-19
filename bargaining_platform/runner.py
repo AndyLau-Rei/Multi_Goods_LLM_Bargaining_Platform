@@ -9,10 +9,18 @@ from typing import Callable
 
 from .engine import NegotiationEngine
 from .model_adapter import BaseLLMAdapter, GenerationResult, MockLLMAdapter
-from .models import Action, GameState, ValidationResult
-from .prompt_builder import default_prompt_path, make_private_view, render_prompt, render_public_update
+from .models import Action, GameState, Outcome, ValidationResult
+from .prompt_builder import (
+    default_prompt_path,
+    make_private_view,
+    render_platform_instruction,
+    render_prompt,
+)
 from .storage import DEFAULT_DB_PATH, save_run_to_sqlite
 from .validator import parse_action
+
+
+_MAX_INVALID_ACTION_ATTEMPTS = 3
 
 
 class LLMAgent:
@@ -24,44 +32,54 @@ class LLMAgent:
         self.prompt_path = prompt_path if prompt_path is not None else default_prompt_path(role)
         self.messages = []
         self.logged_message_count = 0
-        self.transcript_count = 0
+
+    def initialize(self, state: GameState) -> None:
+        """Create this role's persistent history with its private background once."""
+        view = make_private_view(self.role, state)
+        view["active_proposal"] = None
+        view["public_transcript"] = []
+        view["remaining_rounds"] = state.max_rounds
+        self.messages.append({
+            "role": "system",
+            "content": render_prompt(self.role, view, template_path=self.prompt_path),
+        })
 
     def decide(
         self, state: GameState, action_schema: dict
     ) -> tuple[Action | ValidationResult, str, list[dict[str, str]], GenerationResult]:
-        view = make_private_view(self.role, state)
         if not self.messages:
-            background_view = {
-                **view,
-                "active_proposal": None,
-                "public_transcript": [],
-                "remaining_rounds": state.max_rounds,
-            }
-            background = render_prompt(
-                self.role, background_view, template_path=self.prompt_path
-            )
-            self.messages.append({
-                "role": "system",
-                "content": background + "\n\nThe latest user message is the current public state.",
-            })
-        self.messages.append({
-            "role": "user",
-            "content": render_public_update(view, self.transcript_count),
-        })
+            self.initialize(state)
+        if self.role == "seller" and not any(
+            message["role"] == "user" for message in self.messages
+        ):
+            self.messages.append({"role": "user", "content": render_platform_instruction()})
         logged_prompt = "\n\n".join(
             f"{message['role']}: {message['content']}" for message in self.messages
         )
         new_messages = deepcopy(self.messages[self.logged_message_count:])
         generated = self.adapter.generate(self.messages, action_schema)
-        self.messages.append({"role": "assistant", "content": generated.text})
+        parsed = parse_action(generated.text, self.role)
+        history_output = generated.text
+        if isinstance(parsed, Action):
+            action_data = parsed.to_dict()
+            action_data.pop("actor", None)
+            action_data.pop("proposal_id", None)
+            if isinstance(action_data.get("proposal"), dict):
+                action_data["proposal"].pop("proposal_id", None)
+            history_output = json.dumps(action_data)
+        self.messages.append({"role": "assistant", "content": history_output})
         self.logged_message_count = len(self.messages)
-        self.transcript_count = len(view["public_transcript"])
-        return parse_action(generated.text, self.role), logged_prompt, new_messages, generated
+        return parsed, logged_prompt, new_messages, generated
 
     def report_validation(self, result: ValidationResult) -> None:
         self.messages.append({
             "role": "user",
-            "content": f"Your previous action was rejected: {result.error_code}. {result.message}",
+            "content": (
+                "Your previous action was rejected.\n"
+                f"Error code: {result.error_code}\n"
+                f"Error message: {result.message}\n"
+                "Correct the invalid fields and output exactly one valid JSON action."
+            ),
         })
 
 
@@ -97,6 +115,8 @@ def run_llm_negotiation(
         "seller": LLMAgent("seller", role_adapters["seller"], seller_prompt_path),
         "buyer": LLMAgent("buyer", role_adapters["buyer"], buyer_prompt_path),
     }
+    for agent in agents.values():
+        agent.initialize(engine.state)
     persisted_model_config = deepcopy(model_config or {"version": None, "roles": {}})
     prompt_records = []
     persisted_model_config.setdefault("roles", {})
@@ -141,6 +161,27 @@ def run_llm_negotiation(
                 },
             },
         )
+        if (
+            isinstance(parsed, Action)
+            and parsed.action_type in {"PROPOSE", "COUNTER"}
+            and not isinstance(result, ValidationResult)
+        ):
+            public_proposal = parsed.proposal.to_dict()
+            public_proposal.pop("proposal_id", None)
+            public_proposal.pop("decision_summary", None)
+            public_proposal.setdefault(
+                "effective_prices", deepcopy(engine.state.active_proposal.effective_prices)
+            )
+            public_action = {
+                "action_type": parsed.action_type,
+                "proposal": public_proposal,
+            }
+            update = render_platform_instruction(public_action)
+            for recipient in agents.values():
+                if recipient is not agent:
+                    recipient.messages.append({"role": "user", "content": update})
+                elif role == "buyer":
+                    recipient.messages.append({"role": "user", "content": update})
         if isinstance(result, ValidationResult) and not result.ok:
             if engine.state.outcome is None and engine.state.current_actor != role:
                 agents[engine.state.current_actor].messages.append({
@@ -149,6 +190,16 @@ def run_llm_negotiation(
                 })
             else:
                 agent.report_validation(result)
+                if engine.state.outcome is None:
+                    engine.state.invalid_attempts += 1
+                    if engine.state.invalid_attempts >= _MAX_INVALID_ACTION_ATTEMPTS:
+                        engine.state.outcome = Outcome("INVALID_ACTION")
+                        engine.event_logger.append(
+                            "STATE_TRANSITION",
+                            role,
+                            state_transition_summary="Game ended: invalid action retry exhausted",
+                            round_number=engine.state.round_number,
+                        )
         if progress_callback is not None:
             public_actions = iter(engine.state.public_transcript[transcript_count:])
             public_events = []

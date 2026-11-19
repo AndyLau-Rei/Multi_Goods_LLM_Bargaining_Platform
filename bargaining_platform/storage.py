@@ -386,19 +386,20 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
                     if legacy_budget_rejection else action,
                     role=event["actor"],
                 )
-                legacy_retry_transition = transitions_by_id.get(event["event_id"] + 1)
-                if (
-                    legacy_retry_transition is not None
-                    and legacy_retry_transition["state_transition_summary"]
-                    == "Game ended: invalid action retry exhausted"
-                    and engine.state.outcome is None
-                    and engine.event_logger.events[-1].event_type != "STATE_TRANSITION"
-                ):
-                    engine.state.outcome = Outcome("INVALID_ACTION")
-                    engine.event_logger.append(
-                        "STATE_TRANSITION", event["actor"],
-                        state_transition_summary="Game ended: invalid action retry exhausted",
-                    )
+            legacy_retry_transition = transitions_by_id.get(event["event_id"] + 1)
+            if (
+                legacy_retry_transition is not None
+                and legacy_retry_transition["state_transition_summary"]
+                == "Game ended: invalid action retry exhausted"
+                and engine.state.outcome is None
+                and engine.event_logger.events[-1].event_type != "STATE_TRANSITION"
+            ):
+                engine.state.outcome = Outcome("INVALID_ACTION")
+                engine.event_logger.append(
+                    "STATE_TRANSITION", event["actor"],
+                    state_transition_summary="Game ended: invalid action retry exhausted",
+                    round_number=legacy_retry_transition["round_number"],
+                )
         except Exception as exc:
             raise ReplayDivergenceError(
                 f"Replay failed at event {event['event_id']}"
