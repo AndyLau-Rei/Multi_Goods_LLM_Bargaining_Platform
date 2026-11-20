@@ -56,3 +56,39 @@ def test_public_field_under_private_profiles_is_rejected():
     with patch.object(Path, "read_text", return_value=json.dumps(data)):
         with pytest.raises(ValueError, match="Ambiguous visibility"):
             load_scenario("ambiguous_visibility.json")
+
+
+def test_buyer_first_scenario_is_rejected():
+    data = _sample_data()
+    data["starting_role"] = "buyer"
+
+    with patch.object(Path, "read_text", return_value=json.dumps(data)):
+        with pytest.raises(ValueError, match="starting_role must be seller"):
+            load_scenario("buyer-first.json")
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        ("seller", "unit_cost", "A"),
+        ("seller", "minimum_unit_price", "A"),
+        ("buyer", "unit_value", "A"),
+    ],
+)
+def test_negative_monetary_values_are_rejected(field):
+    data = _sample_data()
+    role, name, item_id = field
+    data["private_profiles"][role][name][item_id] = -1
+
+    with patch.object(Path, "read_text", return_value=json.dumps(data)):
+        with pytest.raises(ValueError, match="must be non-negative"):
+            load_scenario("negative-value.json")
+
+
+def test_negative_budget_is_rejected():
+    data = _sample_data()
+    data["private_profiles"]["buyer"]["budget"] = -1
+
+    with patch.object(Path, "read_text", return_value=json.dumps(data)):
+        with pytest.raises(ValueError, match="must be non-negative"):
+            load_scenario("negative-budget.json")

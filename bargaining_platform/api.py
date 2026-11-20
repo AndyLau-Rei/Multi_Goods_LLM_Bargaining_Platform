@@ -44,6 +44,7 @@ async def validation_error(_request: Request, exc: RequestValidationError) -> JS
 _active_runs: dict[str, dict[str, Any]] = {}
 _active_runs_lock = Lock()
 _logger = logging.getLogger(__name__)
+_SCENARIO_DIR = Path(__file__).resolve().parent.parent / "scenarios"
 
 _PUBLIC_METRIC_FIELDS = {
     "run_count",
@@ -87,11 +88,25 @@ def prompts() -> dict[str, Any]:
 @app.get("/scenarios")
 def scenarios() -> list[dict[str, str]]:
     """List scenario files available to the local viewer."""
-    directory = Path("scenarios")
     return [
         {"id": f"scenarios/{path.name}", "name": load_scenario(str(path))["scenario_id"]}
-        for path in sorted(directory.glob("*.json"))
+        for path in sorted(_SCENARIO_DIR.glob("*.json"))
     ]
+
+
+def _scenario_path(scenario_id: str) -> Path:
+    """Resolve a requested scenario inside the repository scenario directory."""
+    requested = Path(scenario_id)
+    if requested.is_absolute():
+        raise ValueError("INVALID_SCENARIO")
+    candidate = (Path(__file__).resolve().parent.parent / requested).resolve()
+    try:
+        candidate.relative_to(_SCENARIO_DIR.resolve())
+    except ValueError as exc:
+        raise ValueError("INVALID_SCENARIO") from exc
+    if candidate.suffix.lower() != ".json" or not candidate.is_file():
+        raise ValueError("INVALID_SCENARIO")
+    return candidate
 
 
 class RunRequest(BaseModel):
@@ -137,12 +152,17 @@ def _run_in_background(
                 active["round_number"] = progress["round_number"]
                 active["events"] = progress["events"]
 
+        def publish_private(summaries: list[dict]) -> None:
+            with _active_runs_lock:
+                _active_runs[run_id]["private_summaries"] = summaries
+
         run_llm_negotiation(
             scenario,
             adapters,
             run_id=run_id,
             db_path=db_path,
             progress_callback=publish,
+            private_progress_callback=publish_private,
             model_config=model_config,
             seller_prompt_path=(
                 default_prompt_path("seller").parent / seller_prompt if seller_prompt else None
@@ -153,15 +173,23 @@ def _run_in_background(
         )
     except Exception:
         _logger.exception("Background negotiation failed for run %s", run_id)
+        persisted = False
         try:
-            save_run_to_sqlite(run_id, scenario, {"status": "ERROR"}, (), db_path)
+            load_run_from_sqlite(run_id, db_path)
+            persisted = True
+        except KeyError:
+            try:
+                save_run_to_sqlite(run_id, scenario, {"status": "ERROR"}, (), db_path)
+                persisted = True
+            except Exception:
+                _logger.exception("Could not persist failure for run %s", run_id)
         except Exception:
             _logger.exception("Could not persist failure for run %s", run_id)
-            with _active_runs_lock:
-                _active_runs[run_id]["status"] = "ERROR"
-        else:
-            with _active_runs_lock:
+        with _active_runs_lock:
+            if persisted:
                 _active_runs.pop(run_id, None)
+            else:
+                _active_runs[run_id]["status"] = "ERROR"
     else:
         # The saved run is readable before the in-memory copy disappears.
         with _active_runs_lock:
@@ -172,7 +200,7 @@ def _run_in_background(
 def start_run(request: RunRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
     """Schedule one negotiation and return its run ID immediately."""
     try:
-        scenario = load_scenario(request.scenario_id)
+        scenario = load_scenario(str(_scenario_path(request.scenario_id)))
         for role in ("seller", "buyer"):
             selected = getattr(request, f"{role}_prompt")
             if selected is not None and selected not in _prompt_choices(role):
@@ -190,11 +218,15 @@ def start_run(request: RunRequest, background_tasks: BackgroundTasks) -> dict[st
         detail = str(exc) if isinstance(exc, ValueError) and str(exc) in {
             "UNKNOWN_MODEL", "MODEL_DISABLED", "MISSING_API_KEY",
             "UNKNOWN_PROMPT", "INVALID_PROMPT",
+            "INVALID_SCENARIO",
         } else "Run could not be started"
         raise HTTPException(status_code=400, detail=detail) from exc
     run_id = f"run-{uuid.uuid4().hex}"
     with _active_runs_lock:
-        _active_runs[run_id] = {"status": "IN_PROGRESS", "round_number": 1, "events": []}
+        _active_runs[run_id] = {
+            "status": "IN_PROGRESS", "round_number": 1, "events": [],
+            "private_summaries": [],
+        }
     background_tasks.add_task(
         _run_in_background,
         run_id,
@@ -249,7 +281,7 @@ def run_events(run_id: str) -> dict[str, Any]:
             }
     try:
         run = load_run_from_sqlite(run_id, _db_path())
-        if (run["outcome"] or {}).get("status") == "ERROR":
+        if (run["outcome"] or {}).get("status") == "ERROR" and not run["events"]:
             return {"run_id": run_id, "round_number": 1, "events": []}
         state = replay_run(run_id, _db_path())
     except KeyError as exc:
@@ -293,3 +325,31 @@ def run_view(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=409, detail="Run could not be replayed") from exc
+
+
+@app.get("/runs/{run_id}/summaries")
+def run_summaries(run_id: str) -> dict[str, Any]:
+    """Return private decision summaries to the platform user only."""
+    with _active_runs_lock:
+        active = _active_runs.get(run_id)
+        if active is not None:
+            return {"run_id": run_id, "summaries": deepcopy(active["private_summaries"])}
+    try:
+        run = load_run_from_sqlite(run_id, _db_path())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "run_id": run_id,
+        "summaries": [
+            {
+                "event_id": event["event_id"],
+                "actor": event["actor"],
+                "decision_summary": event["private_decision_summary"],
+            }
+            for event in run["events"]
+            if event["event_type"] == "ACTION_ATTEMPT"
+            and event["validation_result"]
+            and event["validation_result"].get("ok")
+            and event["private_decision_summary"] is not None
+        ],
+    }

@@ -94,6 +94,7 @@ def run_llm_negotiation(
     seller_prompt_path: str | Path | None = None,
     buyer_prompt_path: str | Path | None = None,
     progress_callback: Callable[[dict], None] | None = None,
+    private_progress_callback: Callable[[list[dict]], None] | None = None,
     model_config: dict | None = None,
 ) -> NegotiationEngine:
     """Run role-scoped generation until a terminal outcome and persist the run."""
@@ -127,12 +128,31 @@ def run_llm_negotiation(
             "round_number": engine.state.round_number,
             "events": public_events(engine.event_logger.events, engine.state.public_transcript),
         })
+    if private_progress_callback is not None:
+        private_progress_callback(_private_summaries(engine.event_logger.events))
     while engine.state.outcome is None:
         role = engine.state.current_actor
         agent = agents[role]
         action_schema = _action_schema()
         event_count = len(engine.event_logger.events)
-        parsed, prompt, new_messages, generated = agent.decide(engine.state, action_schema)
+        try:
+            parsed, prompt, new_messages, generated = agent.decide(engine.state, action_schema)
+        except Exception:
+            engine.state.outcome = Outcome("ERROR")
+            try:
+                save_run_to_sqlite(
+                    run_id,
+                    scenario,
+                    engine.state.outcome,
+                    engine.event_logger.events,
+                    db_path,
+                    condition_id=condition_id,
+                    model_config=persisted_model_config,
+                    prompts=prompt_records,
+                )
+            except Exception as exc:
+                raise RuntimeError("Could not persist failed run") from exc
+            raise
         prompt_records.append({
             "event_id": event_count + 1,
             "role": role,
@@ -166,12 +186,9 @@ def run_llm_negotiation(
             and parsed.action_type in {"PROPOSE", "COUNTER"}
             and not isinstance(result, ValidationResult)
         ):
-            public_proposal = parsed.proposal.to_dict()
+            public_proposal = engine.state.active_proposal.to_dict()
             public_proposal.pop("proposal_id", None)
             public_proposal.pop("decision_summary", None)
-            public_proposal.setdefault(
-                "effective_prices", deepcopy(engine.state.active_proposal.effective_prices)
-            )
             public_action = {
                 "action_type": parsed.action_type,
                 "proposal": public_proposal,
@@ -209,6 +226,8 @@ def run_llm_negotiation(
                     engine.state.outcome.to_dict() if engine.state.outcome else None,
                 ),
             })
+        if private_progress_callback is not None:
+            private_progress_callback(_private_summaries(engine.event_logger.events))
     save_run_to_sqlite(
         run_id,
         scenario,
@@ -220,6 +239,21 @@ def run_llm_negotiation(
         prompts=prompt_records,
     )
     return engine
+
+
+def _private_summaries(events: list) -> list[dict]:
+    return [
+        {
+            "event_id": event.event_id,
+            "actor": event.actor,
+            "decision_summary": event.private_decision_summary,
+        }
+        for event in events
+        if event.event_type == "ACTION_ATTEMPT"
+        and event.validation_result
+        and event.validation_result.get("ok")
+        and event.private_decision_summary is not None
+    ]
 
 
 def _adapter_model_config(adapter: BaseLLMAdapter) -> dict:

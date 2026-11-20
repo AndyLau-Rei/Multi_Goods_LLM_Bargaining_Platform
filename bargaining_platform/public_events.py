@@ -2,12 +2,14 @@
 
 from copy import deepcopy
 
+from .prompt_builder import render_platform_instruction
+
 
 def public_events(events: list, transcript: list[dict], outcome: dict | None = None) -> list[dict]:
     """Build viewer events without exposing private action or provider records."""
     result = []
     actions = iter(transcript)
-    result.append(_platform("Please make the opening proposal.", 1))
+    result.append(_platform_prompt("seller", render_platform_instruction(), 1))
     invalid_by_role = {"seller": 0, "buyer": 0}
 
     for event in events:
@@ -28,6 +30,7 @@ def public_events(events: list, transcript: list[dict], outcome: dict | None = N
             action = next(actions)
             action_type = action.get("action_type")
             record = {
+                "event_id": _value(event, "event_id"),
                 "event_type": "SELLER_ACTION" if actor == "seller" else "BUYER_ACTION",
                 "actor": actor,
                 "action_type": action_type,
@@ -38,13 +41,28 @@ def public_events(events: list, transcript: list[dict], outcome: dict | None = N
                 record["public_proposal"] = _public_proposal(action_type, proposal)
             result.append(record)
             if action_type in {"PROPOSE", "COUNTER"}:
+                public_action = {"action_type": action_type, "proposal": deepcopy(proposal)}
+                public_action["proposal"].pop("proposal_id", None)
+                public_action["proposal"].pop("decision_summary", None)
+                instruction = render_platform_instruction(public_action)
                 if actor == "seller":
                     result.extend((
                         _platform("The seller submitted a proposal. Buyer is reviewing it.", round_number),
-                        _platform("Please review the seller's proposal and choose COUNTER, ACCEPT, or WALK_AWAY.", round_number),
+                        _platform_prompt(
+                            "buyer",
+                            instruction,
+                            round_number,
+                        ),
                     ))
                 else:
-                    result.append(_platform("The buyer submitted a response. Seller is reviewing it.", round_number))
+                    result.extend((
+                        _platform("The buyer submitted a response. Seller is reviewing it.", round_number),
+                        _platform_prompt(
+                            "seller",
+                            instruction,
+                            round_number,
+                        ),
+                    ))
             elif action_type == "ACCEPT":
                 result.append(_platform("The proposal was accepted.", round_number))
             elif action_type == "WALK_AWAY":
@@ -70,8 +88,9 @@ def _public_proposal(action_type: str, proposal: dict) -> dict:
     effective = proposal.get("effective_prices") or {}
     for term in proposal.get("terms", []):
         clean = {key: deepcopy(term[key]) for key in ("item_id", "quantity", "unit", "unit_price") if key in term}
-        if term.get("item_id") in effective:
-            clean["effective_unit_price"] = deepcopy(effective[term["item_id"]])
+        effective_price = effective.get(term.get("item_id"))
+        if effective_price is not None and effective_price != term.get("unit_price"):
+            clean["effective_unit_price"] = deepcopy(effective_price)
         public["terms"].append(clean)
     for condition in proposal.get("conditions", []):
         public["conditions"].append({
@@ -86,6 +105,16 @@ def _platform(message: str, round_number: int) -> dict:
     return {
         "event_type": "PLATFORM_MESSAGE",
         "actor": "platform",
+        "message": message,
+        "round_number": round_number,
+    }
+
+
+def _platform_prompt(recipient: str, message: str, round_number: int) -> dict:
+    return {
+        "event_type": "PLATFORM_PROMPT",
+        "actor": "platform",
+        "recipient": recipient,
         "message": message,
         "round_number": round_number,
     }

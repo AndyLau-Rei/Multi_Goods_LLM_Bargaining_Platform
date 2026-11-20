@@ -2,8 +2,10 @@ import json
 import hashlib
 import sqlite3
 
+import pytest
+
 from bargaining_platform import runner
-from bargaining_platform.model_adapter import GenerationResult, MockLLMAdapter
+from bargaining_platform.model_adapter import AdapterError, GenerationResult, MockLLMAdapter
 from bargaining_platform.runner import run_llm_negotiation
 from bargaining_platform.scenario import load_scenario
 from bargaining_platform.storage import load_run_from_sqlite, replay_run
@@ -50,6 +52,60 @@ def test_e2e_mock_llm_run(tmp_path):
     assert engine.state.outcome.status == "AGREEMENT"
     saved = load_run_from_sqlite("e2e-1", tmp_path / "runs.db")
     assert saved["outcome_status"] == "AGREEMENT"
+
+
+def test_provider_failure_persists_partial_run(tmp_path):
+    proposal = _proposal()
+    adapters = {
+        "seller": MockLLMAdapter([json.dumps({"action_type": "PROPOSE", "proposal": proposal})]),
+        "buyer": MockLLMAdapter([]),
+    }
+
+    with pytest.raises(AdapterError):
+        run_llm_negotiation(
+            _scenario(), adapters, run_id="provider-error", db_path=tmp_path / "runs.db"
+        )
+
+    saved = load_run_from_sqlite("provider-error", tmp_path / "runs.db")
+    assert saved["outcome_status"] == "ERROR"
+    assert [event["event_type"] for event in saved["events"]] == [
+        "ACTION_ATTEMPT", "STATE_TRANSITION",
+    ]
+    assert replay_run("provider-error", tmp_path / "runs.db").outcome.status == "ERROR"
+
+
+def test_forwarded_bundle_prices_are_engine_computed(tmp_path):
+    proposal = _proposal()
+    proposal["conditions"] = [{
+        "type": "discount_if_item_in_bundle",
+        "discounted_item_id": "A",
+        "discount_per_unit": 20,
+        "required_item_id": "B",
+        "minimum_required_quantity": 1,
+    }]
+
+    class CapturingAdapter(MockLLMAdapter):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.prompts = []
+
+        def generate(self, prompt, action_schema):
+            self.prompts.append([dict(message) for message in prompt])
+            return super().generate(prompt, action_schema)
+
+    seller = CapturingAdapter([json.dumps({"action_type": "PROPOSE", "proposal": proposal})])
+    buyer = CapturingAdapter([json.dumps({"action_type": "ACCEPT"})])
+    run_llm_negotiation(
+        _scenario(), {"seller": seller, "buyer": buyer},
+        run_id="computed-live-price", db_path=tmp_path / "runs.db",
+    )
+
+    instruction = next(
+        message["content"] for message in buyer.prompts[0]
+        if message["role"] == "user" and "proposal" in message["content"].lower()
+    )
+    forwarded = json.loads(instruction.split("\n\n", 1)[1])
+    assert forwarded["proposal"]["effective_prices"] == {"A": 100, "B": 60}
 
 
 def test_e2e_llm_retry_on_bad_json(tmp_path):
@@ -327,16 +383,20 @@ def test_progress_callback_publishes_only_committed_public_events(tmp_path):
         "buyer": MockLLMAdapter([json.dumps({"action_type": "ACCEPT", "proposal_id": "e2e-1"})]),
     }
     progress = []
+    private_progress = []
 
     run_llm_negotiation(
         _scenario(), adapters, run_id="progress", db_path=tmp_path / "runs.db",
         progress_callback=progress.append,
+        private_progress_callback=private_progress.append,
     )
 
     assert len(progress) == 4
     assert progress[0]["events"] == [{
-        "event_type": "PLATFORM_MESSAGE", "actor": "platform",
-        "message": "Please make the opening proposal.", "round_number": 1,
+        "event_type": "PLATFORM_PROMPT", "actor": "platform",
+        "recipient": "seller",
+        "message": "Please make the opening proposal now. Output exactly one valid JSON action.",
+        "round_number": 1,
     }]
     assert [event["event_type"] for event in progress[-1]["events"] if event["event_type"].endswith("_ACTION")] == ["SELLER_ACTION", "BUYER_ACTION"]
     assert progress[-1]["events"][-1]["state_transition_summary"] == "Proposal accepted; game ended"
@@ -344,7 +404,15 @@ def test_progress_callback_publishes_only_committed_public_events(tmp_path):
     serialized = json.dumps(progress)
     for private_field in ("raw_output", "metadata", "validation_result", "private_decision_summary", "seller-only note"):
         assert private_field not in serialized
-    assert all("event_id" not in event for update in progress for event in update["events"])
+    public_action_events = [
+        event for event in progress[-1]["events"]
+        if event["event_type"] in {"SELLER_ACTION", "BUYER_ACTION"}
+    ]
+    assert [event["event_id"] for event in public_action_events] == [2, 4]
+    assert private_progress[-1] == [{
+        "event_id": 2, "actor": "seller", "decision_summary": "seller-only note",
+    }]
+    assert "seller-only note" not in serialized
 
 
 def test_runner_uses_separate_role_agents_and_prompt_contexts(tmp_path, monkeypatch):

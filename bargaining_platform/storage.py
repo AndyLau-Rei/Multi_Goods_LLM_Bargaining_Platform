@@ -438,6 +438,9 @@ def replay_run(run_id: str, db_path: str | Path = DEFAULT_DB_PATH):
 
     if transitions_seen != len(transition_events):
         raise ReplayDivergenceError("Replay event count diverged")
+    if run["outcome_status"] == "ERROR":
+        engine.state.outcome = Outcome("ERROR")
+        return engine.state
     actual_outcome = engine.state.outcome.to_dict() if engine.state.outcome else None
     if actual_outcome != run["outcome"]:
         raise ReplayDivergenceError("Final outcome diverged from stored outcome")

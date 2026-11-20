@@ -62,6 +62,12 @@ def _number(value: object, location: str) -> None:
         raise ValueError(f"{location} must be a finite number")
 
 
+def _nonnegative_number(value: object, location: str) -> None:
+    _number(value, location)
+    if value < 0:
+        raise ValueError(f"{location} must be non-negative")
+
+
 def validate_scenario(data: object) -> dict:
     """Validate the shop scenario's required structure and field visibility."""
     if isinstance(data, dict) and isinstance(data.get("private_profiles"), dict):
@@ -80,8 +86,8 @@ def validate_scenario(data: object) -> dict:
     rounds = scenario["max_rounds"]
     if isinstance(rounds, bool) or not isinstance(rounds, int) or rounds <= 0:
         raise ValueError("scenario.max_rounds must be a positive integer")
-    if scenario["starting_role"] not in ("seller", "buyer"):
-        raise ValueError("scenario.starting_role must be seller or buyer")
+    if scenario["starting_role"] != "seller":
+        raise ValueError("scenario.starting_role must be seller")
 
     catalog = scenario["catalog"]
     if not isinstance(catalog, list) or not catalog:
@@ -132,8 +138,8 @@ def validate_scenario(data: object) -> dict:
         location = f"private_profiles.{name}"
         values = _fields(values, item_ids, location)
         for item_id, value in values.items():
-            _number(value, f"{location}.{item_id}")
-    _number(buyer["budget"], "private_profiles.buyer.budget")
+            _nonnegative_number(value, f"{location}.{item_id}")
+    _nonnegative_number(buyer["budget"], "private_profiles.buyer.budget")
     for role, profile in (("seller", seller), ("buyer", buyer)):
         _number(profile["reservation_utility"], f"private_profiles.{role}.reservation_utility")
         actions = profile["allowed_actions"]

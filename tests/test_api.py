@@ -9,17 +9,18 @@ from fastapi.testclient import TestClient
 from bargaining_platform import api as api_module
 from bargaining_platform.api import app
 from bargaining_platform.model_adapter import MockLLMAdapter
+from bargaining_platform.prompt_builder import render_platform_instruction
 from bargaining_platform.runner import run_llm_negotiation
 from bargaining_platform.scenario import load_scenario
 from bargaining_platform.storage import load_run_from_sqlite
 
 
-def _test_adapters(proposal_id="api-test"):
+def _test_adapters(proposal_id="api-test", decision_summary=""):
     proposal = {
         "proposal_id": proposal_id,
         "acceptance_mode": "all_or_nothing",
         "terms": [{"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"}],
-        "conditions": [], "decision_summary": "",
+        "conditions": [], "decision_summary": decision_summary,
         "original_prices": {"A": 120}, "effective_prices": {"A": 120},
     }
     return {
@@ -108,6 +109,34 @@ def test_background_failure_marks_run_error(tmp_path, monkeypatch):
     assert events.json()["events"] == []
 
 
+def test_background_provider_failure_keeps_partial_events(tmp_path, monkeypatch):
+    monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
+    adapters = _test_adapters("partial-error")
+    adapters["buyer"] = MockLLMAdapter([])
+    monkeypatch.setattr(api_module, "create_role_adapters", lambda *_: (adapters, {"execution": "test"}))
+    scheduled = []
+
+    def capture_task(_background_tasks, function, *args, **kwargs):
+        scheduled.append((function, args, kwargs))
+
+    client = TestClient(app)
+    with patch.object(BackgroundTasks, "add_task", capture_task):
+        response = client.post(
+            "/runs",
+            json={"scenario_id": "scenarios/shop_bundle.json"},
+        )
+    run_id = response.json()["run_id"]
+    function, args, kwargs = scheduled.pop()
+    function(*args, **kwargs)
+
+    saved = load_run_from_sqlite(run_id, tmp_path / "runs.db")
+    assert saved["outcome_status"] == "ERROR"
+    assert saved["events"]
+    events = client.get(f"/runs/{run_id}/events")
+    assert events.status_code == 200
+    assert any(event["event_type"] == "SELLER_ACTION" for event in events.json()["events"])
+
+
 def test_in_progress_status_and_events(monkeypatch):
     public_event = {
         "event_id": 2,
@@ -130,6 +159,46 @@ def test_in_progress_status_and_events(monkeypatch):
         "run_id": "live", "round_number": 2, "events": [public_event],
     }
     assert "private_decision_summary" not in json.dumps(events.json())
+
+
+def test_private_summaries_link_to_action_but_stay_out_of_public_events(tmp_path, monkeypatch):
+    db_path = tmp_path / "runs.db"
+    monkeypatch.setenv("BARGAINING_DB_PATH", str(db_path))
+    scenario = load_scenario("scenarios/shop_bundle.json")
+    scenario["private_profiles"]["buyer"]["reservation_utility"] = 0
+    scenario["private_profiles"]["seller"]["reservation_utility"] = 0
+    run_llm_negotiation(
+        scenario,
+        _test_adapters("summary-link", "seller-only strategy"),
+        run_id="summary-link",
+        db_path=db_path,
+    )
+    client = TestClient(app)
+
+    events = client.get("/runs/summary-link/events").json()["events"]
+    seller_action = next(event for event in events if event["event_type"] == "SELLER_ACTION")
+    assert seller_action["event_id"] == 1
+    assert "seller-only strategy" not in json.dumps(events)
+    response = client.get("/runs/summary-link/summaries")
+    assert response.status_code == 200
+    assert response.json()["summaries"] == [{
+        "event_id": seller_action["event_id"],
+        "actor": "seller",
+        "decision_summary": "seller-only strategy",
+    }]
+def test_live_private_summaries_are_available_to_viewer(monkeypatch):
+    monkeypatch.setattr(api_module, "_active_runs", {
+        "live": {
+            "status": "IN_PROGRESS", "round_number": 1, "events": [],
+            "private_summaries": [{
+                "event_id": 4, "actor": "buyer", "decision_summary": "live buyer note",
+            }],
+        },
+    })
+    client = TestClient(app)
+    response = client.get("/runs/live/summaries")
+    assert response.status_code == 200
+    assert response.json()["summaries"][0]["event_id"] == 4
 
 
 def test_view_privacy_isolation(tmp_path, monkeypatch):
@@ -183,6 +252,7 @@ def test_viewer_page_and_static_mount():
     assert "Negotiation Viewer" in page.text
     assert 'id="seller-prompt"' in page.text
     assert 'id="buyer-prompt"' in page.text
+    assert "summary-token" not in page.text
     static = client.get("/static/app.js")
     assert static.status_code == 200
     assert "renderEvents" in static.text
@@ -195,6 +265,24 @@ def test_scenarios_endpoint_lists_available_scenarios():
     scenarios = {scenario["id"]: scenario["name"] for scenario in response.json()}
     assert scenarios["scenarios/single_product.json"] == "single_product"
     assert scenarios["scenarios/shop_bundle.json"] == "shop-v1"
+
+
+def test_scenarios_endpoint_is_independent_of_working_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    response = TestClient(app).get("/scenarios")
+
+    assert response.status_code == 200
+    assert {scenario["id"] for scenario in response.json()} >= {
+        "scenarios/shop_bundle.json", "scenarios/single_product.json",
+    }
+
+
+def test_start_run_rejects_scenario_outside_repository_scenarios(tmp_path, monkeypatch):
+    monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
+    response = TestClient(app).post("/runs", json={"scenario_id": "../README.md"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "INVALID_SCENARIO"
 
 
 def test_prompt_selection_is_role_scoped_and_persisted(tmp_path, monkeypatch):
@@ -344,10 +432,11 @@ def test_events_show_authoritative_effective_bundle_price(tmp_path, monkeypatch)
     proposal = action_event["public_proposal"]
     assert proposal["terms"][0]["unit_price"] == 120
     assert proposal["terms"][0]["effective_unit_price"] == 100
+    assert "effective_unit_price" not in proposal["terms"][1]
     assert proposal["conditions"][0]["discount_per_unit"] == 20
     assert proposal["action_type"] == "PROPOSE"
     assert set(proposal) == {"action_type", "terms", "conditions"}
-    assert set(action_event) == {"event_type", "actor", "action_type", "public_proposal", "round_number"}
+    assert set(action_event) == {"event_id", "event_type", "actor", "action_type", "public_proposal", "round_number"}
     assert {"event_type", "actor", "message", "round_number"} == set(
         next(event for event in response.json()["events"] if event["event_type"] == "PLATFORM_MESSAGE")
     )
@@ -359,8 +448,6 @@ def test_events_show_authoritative_effective_bundle_price(tmp_path, monkeypatch)
     assert "private_decision_summary" not in serialized
     assert "decision_summary" not in serialized
     assert "proposal_id" not in serialized
-    assert "original_prices" not in serialized
-    assert "effective_prices" not in serialized
 
 
 def test_api_round_display_with_retries(tmp_path, monkeypatch):
@@ -393,13 +480,29 @@ def test_api_round_display_with_retries(tmp_path, monkeypatch):
             })
         ]),
     }
-    run_llm_negotiation(
+    engine = run_llm_negotiation(
         scenario, adapters, run_id="retry-round",
         db_path=tmp_path / "runs.db",
     )
     response = TestClient(app).get("/runs/retry-round/events")
     assert response.status_code == 200
     assert response.json()["round_number"] == 2
+    seller_prompt = next(
+        event for event in response.json()["events"]
+        if event["event_type"] == "PLATFORM_PROMPT"
+        and event["recipient"] == "seller"
+        and event["message"].startswith("The following proposal")
+    )
+    buyer_action = next(action for action in engine.state.public_transcript if action["actor"] == "buyer")
+    proposal = {
+        key: value for key, value in buyer_action["proposal"].items()
+        if key not in {"proposal_id", "decision_summary"}
+    }
+    assert seller_prompt["message"] == render_platform_instruction({
+        "action_type": buyer_action["action_type"], "proposal": proposal,
+    })
+    assert '"effective_prices"' in seller_prompt["message"]
+    assert "decision_summary" not in seller_prompt["message"]
 
 
 def test_api_schema_corrections_do_not_emit_false_terminal_transition(tmp_path, monkeypatch):

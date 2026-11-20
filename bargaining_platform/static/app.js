@@ -82,10 +82,24 @@ function actionText(event) {
   return proposalText(event.public_proposal);
 }
 
-function renderEvents(events, roundNumber, inProgress) {
+function renderEvents(events, roundNumber, inProgress, summaries = []) {
   const transcript = $("transcript");
+  const summariesByEvent = new Map(summaries.map((summary) => [String(summary.event_id), summary.decision_summary]));
   transcript.querySelector("[data-thinking]")?.remove();
   events.slice(lastEventCount).forEach((event) => {
+    if (event.event_type === "PLATFORM_PROMPT") {
+      const prompt = document.createElement("aside");
+      prompt.className = "mx-auto max-w-[88%] rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-center text-blue-950";
+      const title = document.createElement("strong");
+      title.className = "mb-1 block text-xs font-semibold text-blue-700";
+      title.textContent = `Platform prompt to ${event.recipient || "agent"}`;
+      const body = document.createElement("p");
+      body.className = "m-0 text-sm leading-6";
+      body.textContent = event.message;
+      prompt.append(title, body);
+      transcript.appendChild(prompt);
+      return;
+    }
     if (event.event_type === "PLATFORM_MESSAGE") {
       const system = document.createElement("p");
       system.className = "text-center text-xs text-gray-500";
@@ -107,7 +121,8 @@ function renderEvents(events, roundNumber, inProgress) {
     badge.className = `mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${event.actor === "buyer" ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-600"}`;
     badge.textContent = event.actor === "buyer" ? "B" : "S";
     const content = document.createElement("div");
-    content.className = `rounded-2xl px-4 py-3 ${event.actor === "buyer" ? "rounded-tr-md border border-blue-100 bg-blue-50 text-gray-800" : "rounded-tl-md bg-gray-100 text-gray-800"}`;
+    content.className = `group relative rounded-2xl px-4 py-3 ${event.actor === "buyer" ? "rounded-tr-md border border-blue-100 bg-blue-50 text-gray-800" : "rounded-tl-md bg-gray-100 text-gray-800"}`;
+    if (event.event_id !== undefined) content.dataset.eventId = String(event.event_id);
     const title = document.createElement("strong");
     title.className = "mb-1 block text-xs font-semibold capitalize text-gray-500";
     title.textContent = `${event.actor || "actor"} · ${event.action_type || "action"}`;
@@ -117,6 +132,19 @@ function renderEvents(events, roundNumber, inProgress) {
     content.append(title, body);
     bubble.append(badge, content);
     transcript.appendChild(bubble);
+  });
+  transcript.querySelectorAll("[data-event-id]").forEach((content) => {
+    const summary = summariesByEvent.get(content.dataset.eventId);
+    if (!summary) return;
+    let tooltip = content.querySelector("[data-private-summary]");
+    if (!tooltip) {
+      tooltip = document.createElement("div");
+      tooltip.dataset.privateSummary = "";
+      tooltip.setAttribute("role", "tooltip");
+      tooltip.className = "pointer-events-none absolute left-0 top-0 z-20 hidden w-64 max-w-[calc(100vw-4rem)] rounded-md border border-gray-300 bg-white p-3 text-left text-xs leading-5 text-gray-700 shadow-lg group-hover:block";
+      content.appendChild(tooltip);
+    }
+    tooltip.textContent = summary;
   });
   lastEventCount = events.length;
   if (events.some((event) => event.event_type === "SELLER_ACTION" || event.event_type === "BUYER_ACTION")) {
@@ -139,20 +167,22 @@ function renderEvents(events, roundNumber, inProgress) {
 }
 
 async function refresh(runId, generation) {
-  const [eventsResponse, statusResponse] = await Promise.all([
+  const [eventsResponse, statusResponse, summariesResponse] = await Promise.all([
     fetch(`/runs/${encodeURIComponent(runId)}/events`),
     fetch(`/runs/${encodeURIComponent(runId)}/status`),
+    fetch(`/runs/${encodeURIComponent(runId)}/summaries`),
   ]);
   if (!eventsResponse.ok || !statusResponse.ok) throw new Error("Run could not be loaded");
   const events = await eventsResponse.json();
   const status = await statusResponse.json();
+  const summaries = summariesResponse.ok ? (await summariesResponse.json()).summaries || [] : [];
   if (generation !== watchGeneration) return false;
   const outcome = status.outcome || {};
   const outcomeLabel = status.status || outcome.status || "IN_PROGRESS";
-  renderEvents(events.events || [], events.round_number, outcomeLabel === "IN_PROGRESS");
+  renderEvents(events.events || [], events.round_number, outcomeLabel === "IN_PROGRESS", summaries);
   $("metric-run").textContent = runId;
   $("metric-outcome").textContent = outcomeLabel;
-  $("metric-outcome").className = `rounded-full px-3 py-1 text-xs font-semibold ${outcomeLabel === "AGREEMENT" ? "bg-green-50 text-green-700" : outcomeLabel === "IN_PROGRESS" ? "bg-gray-100 text-gray-500" : "bg-amber-50 text-amber-700"}`;
+  $("metric-outcome").className = `shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${outcomeLabel === "AGREEMENT" ? "bg-green-50 text-green-700" : outcomeLabel === "IN_PROGRESS" ? "bg-gray-100 text-gray-500" : "bg-amber-50 text-amber-700"}`;
   const metrics = Object.values(status.metrics || {})[0] || {};
   $("metric-agreement").textContent = money(metrics.agreement_rate);
   $("metric-bundles").textContent = money(metrics.bundle_frequency);
