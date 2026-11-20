@@ -196,11 +196,11 @@ async function watch(runId) {
 
 $("start").addEventListener("click", async () => {
   try {
-    const request = { scenario_id: $("scenario").value, agent_type: $("agent").value };
-    if (request.agent_type === "llm") {
-      request.seller_model = $("seller-model").value;
-      request.buyer_model = $("buyer-model").value;
-    }
+    const request = {
+      scenario_id: $("scenario").value,
+      seller_model: $("seller-model").value,
+      buyer_model: $("buyer-model").value,
+    };
     request.seller_prompt = $("seller-prompt").value;
     request.buyer_prompt = $("buyer-prompt").value;
     const response = await fetch("/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) });

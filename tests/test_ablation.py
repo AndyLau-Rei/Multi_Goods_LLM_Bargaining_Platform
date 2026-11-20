@@ -2,10 +2,29 @@ import json
 import pytest
 
 from bargaining_platform.cli import main
+from bargaining_platform import experiments as experiment_module
 from bargaining_platform.experiments import ExperimentRunner, compare_experiment_configs
+from bargaining_platform.model_adapter import MockLLMAdapter
 
 
-def test_compare_command_runs_both_configs_and_reports(tmp_path, capsys):
+def _use_test_adapters(monkeypatch):
+    proposal = {
+        "proposal_id": "ablation-proposal",
+        "acceptance_mode": "all_or_nothing",
+        "terms": [{"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"}],
+        "conditions": [], "decision_summary": "",
+        "original_prices": {"A": 120}, "effective_prices": {"A": 120},
+    }
+    monkeypatch.setattr(experiment_module, "create_role_adapters", lambda *_: ({
+        "seller": MockLLMAdapter([json.dumps({
+            "action_type": "PROPOSE", "proposal_id": "ablation-proposal", "proposal": proposal,
+        })]),
+        "buyer": MockLLMAdapter([json.dumps({"action_type": "WALK_AWAY"})]),
+    }, {"execution": "test"}))
+
+
+def test_compare_command_runs_both_configs_and_reports(tmp_path, capsys, monkeypatch):
+    _use_test_adapters(monkeypatch)
     database = tmp_path / "ablation.db"
     exit_code = main([
         "compare",
@@ -31,11 +50,11 @@ def test_compare_command_runs_both_configs_and_reports(tmp_path, capsys):
     assert baseline[0].condition_id != treatment[0].condition_id
 
 
-def test_compare_namespaces_identical_variations(tmp_path):
+def test_compare_namespaces_identical_variations(tmp_path, monkeypatch):
+    _use_test_adapters(monkeypatch)
     config = {
         "repetitions": 1,
         "scenario_path": "scenarios/shop_bundle.json",
-        "agent_type": "mock",
         "variations": [{}],
     }
     first = tmp_path / "first.json"
@@ -49,11 +68,11 @@ def test_compare_namespaces_identical_variations(tmp_path):
     assert runner_a.run()[0].condition_id != runner_b.run()[0].condition_id
 
 
-def test_compare_rejects_multiple_variations(tmp_path):
+def test_compare_rejects_multiple_variations(tmp_path, monkeypatch):
+    _use_test_adapters(monkeypatch)
     config = {
         "repetitions": 1,
         "scenario_path": "scenarios/shop_bundle.json",
-        "agent_type": "mock",
         "variations": [{}, {}],
     }
     config_path = tmp_path / "multi.json"

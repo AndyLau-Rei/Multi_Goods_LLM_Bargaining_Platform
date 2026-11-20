@@ -28,11 +28,11 @@ Implement typed models for `Term`, `Condition`, `Proposal`, `Action`, `GameState
 
 Implement seller-first alternating turns, active proposal replacement, atomic acceptance, walk-away, maximum rounds, and terminal outcomes.
 
-**Done when:** scripted agents can complete an agreement, counter repeatedly, walk away, and time out.
+**Done when:** test adapters can complete an agreement, counter repeatedly, walk away, and time out.
 
 ### T-102 — Implement action validation
 
-Validate agent output against the action schema, including a required `decision_summary` on proposals. Log invalid output and request correction from the same agent without a retry limit. Check private proposal constraints on acceptance and end failed acceptance as `NO_DEAL`.
+Validate agent output against the action schema, including a required `decision_summary` on proposals. Log invalid output and request correction from the same agent. End the conversation after five consecutive invalid outputs; reset that agent's retry count after valid output. Check private proposal constraints on acceptance and end failed acceptance as `NO_DEAL`.
 
 **Done when:** invalid actions never mutate authoritative state and every attempt is logged.
 
@@ -112,7 +112,7 @@ Replay a run from its scenario version and action log without calling an LLM. De
 
 Define a provider interface for structured generation, model/version metadata, timeout, retry, and usage logging. Add one concrete provider implementation.
 
-**Done when:** the engine can replace a scripted agent with an LLM agent without changing state-machine code.
+**Done when:** LLM providers can be connected without changing state-machine code.
 
 ### T-402 — Write role-specific prompts
 

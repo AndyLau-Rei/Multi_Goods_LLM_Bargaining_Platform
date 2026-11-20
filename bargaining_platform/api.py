@@ -9,7 +9,7 @@ from copy import deepcopy
 from hmac import compare_digest
 from pathlib import Path
 from threading import Lock
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -21,9 +21,9 @@ from .metrics import calculate_metrics
 from .prompt_builder import default_prompt_path, make_private_view, render_prompt
 from .public_events import public_events as build_public_events
 from .provider_factory import available_models, create_role_adapters, resolve_models
-from .runner import default_mock_adapters, run_llm_negotiation
+from .runner import run_llm_negotiation
 from .scenario import load_scenario
-from .storage import DEFAULT_DB_PATH, load_run_from_sqlite, replay_run
+from .storage import DEFAULT_DB_PATH, load_run_from_sqlite, replay_run, save_run_to_sqlite
 
 
 app = FastAPI(title="Bargaining Platform API", version="0.1.0")
@@ -97,7 +97,6 @@ def scenarios() -> list[dict[str, str]]:
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scenario_id: str
-    agent_type: Literal["mock", "llm"] = "mock"
     seller_model: str | None = None
     buyer_model: str | None = None
     seller_prompt: str | None = None
@@ -125,23 +124,13 @@ def _public_metrics(metrics: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def _run_in_background(
     run_id: str,
     scenario: dict,
-    agent_type: str,
+    adapters: dict,
+    model_config: dict,
     db_path: Path,
-    seller_model: str | None = None,
-    buyer_model: str | None = None,
     seller_prompt: str | None = None,
     buyer_prompt: str | None = None,
 ) -> None:
     try:
-        model_config = None
-        adapters = None
-        if agent_type == "llm":
-            models, version = resolve_models(seller_model, buyer_model)
-            adapters, model_config = create_role_adapters(models, version)
-        use_mock = agent_type == "mock" or adapters is None
-        if use_mock:
-            adapters = default_mock_adapters()
-
         def publish(progress: dict) -> None:
             with _active_runs_lock:
                 active = _active_runs[run_id]
@@ -153,7 +142,6 @@ def _run_in_background(
             adapters,
             run_id=run_id,
             db_path=db_path,
-            mock_demo=use_mock,
             progress_callback=publish,
             model_config=model_config,
             seller_prompt_path=(
@@ -165,8 +153,15 @@ def _run_in_background(
         )
     except Exception:
         _logger.exception("Background negotiation failed for run %s", run_id)
-        with _active_runs_lock:
-            _active_runs[run_id]["status"] = "ERROR"
+        try:
+            save_run_to_sqlite(run_id, scenario, {"status": "ERROR"}, (), db_path)
+        except Exception:
+            _logger.exception("Could not persist failure for run %s", run_id)
+            with _active_runs_lock:
+                _active_runs[run_id]["status"] = "ERROR"
+        else:
+            with _active_runs_lock:
+                _active_runs.pop(run_id, None)
     else:
         # The saved run is readable before the in-memory copy disappears.
         with _active_runs_lock:
@@ -178,10 +173,6 @@ def start_run(request: RunRequest, background_tasks: BackgroundTasks) -> dict[st
     """Schedule one negotiation and return its run ID immediately."""
     try:
         scenario = load_scenario(request.scenario_id)
-        if request.agent_type == "llm":
-            resolve_models(request.seller_model, request.buyer_model)
-        elif request.seller_model is not None or request.buyer_model is not None:
-            raise ValueError("MODEL_SELECTION_REQUIRES_LLM")
         for role in ("seller", "buyer"):
             selected = getattr(request, f"{role}_prompt")
             if selected is not None and selected not in _prompt_choices(role):
@@ -193,9 +184,11 @@ def start_run(request: RunRequest, background_tasks: BackgroundTasks) -> dict[st
                 render_prompt(role, {"role": role, "remaining_rounds": scenario["max_rounds"]}, prompt_path)
             except (OSError, KeyError, ValueError, IndexError, AttributeError) as exc:
                 raise ValueError("INVALID_PROMPT") from exc
+        models, version = resolve_models(request.seller_model, request.buyer_model)
+        adapters, model_config = create_role_adapters(models, version)
     except (OSError, KeyError, ValueError, RuntimeError) as exc:
         detail = str(exc) if isinstance(exc, ValueError) and str(exc) in {
-            "UNKNOWN_MODEL", "MODEL_DISABLED", "MODEL_SELECTION_REQUIRES_LLM",
+            "UNKNOWN_MODEL", "MODEL_DISABLED", "MISSING_API_KEY",
             "UNKNOWN_PROMPT", "INVALID_PROMPT",
         } else "Run could not be started"
         raise HTTPException(status_code=400, detail=detail) from exc
@@ -206,10 +199,9 @@ def start_run(request: RunRequest, background_tasks: BackgroundTasks) -> dict[st
         _run_in_background,
         run_id,
         scenario,
-        request.agent_type,
+        adapters,
+        model_config,
         _db_path(),
-        request.seller_model,
-        request.buyer_model,
         request.seller_prompt,
         request.buyer_prompt,
     )
@@ -238,6 +230,7 @@ def run_status(run_id: str) -> dict[str, Any]:
     }
     return {
         "run_id": run_id,
+        "status": public_outcome.get("status"),
         "outcome": public_outcome,
         "metrics": _public_metrics(calculate_metrics(_db_path(), run_id=run_id)),
     }
@@ -256,6 +249,8 @@ def run_events(run_id: str) -> dict[str, Any]:
             }
     try:
         run = load_run_from_sqlite(run_id, _db_path())
+        if (run["outcome"] or {}).get("status") == "ERROR":
+            return {"run_id": run_id, "round_number": 1, "events": []}
         state = replay_run(run_id, _db_path())
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

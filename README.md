@@ -1,6 +1,6 @@
 # Multi-Goods LLM Bargaining Platform
 
-This repository provides a deterministic command-line bargaining simulator for a seller and buyer negotiating over one or more catalog items. It supports typed proposals, conditional bundle discounts, role-private prompts, event logging, SQLite persistence, JSONL export, replay, experiments, metrics, and failure reports.
+This repository provides an LLM bargaining platform for a seller and buyer negotiating over one or more catalog items. It supports typed proposals, conditional bundle discounts, role-private prompts, event logging, SQLite persistence, JSONL export, replay, experiments, metrics, and failure reports.
 
 ## Install
 
@@ -21,31 +21,31 @@ Every operation is an explicit subcommand. Run `python -m bargaining_platform.cl
 
 ### Run one negotiation
 
-Validate and load a scenario without model calls:
+Check a scenario JSON file without starting a negotiation:
 
 ```powershell
-python -m bargaining_platform.cli run --scenario scenarios/shop_bundle.json --agent scripted
+python -m bargaining_platform.cli check-scenario --scenario scenarios/shop_bundle.json
 ```
 
-Run the deterministic offline demo and save it to `results/runs.db`:
+Run a negotiation and save it to `results/runs.db`:
 
 ```powershell
-python -m bargaining_platform.cli run --scenario scenarios/shop_bundle.json --agent mock
+python -m bargaining_platform.cli run --scenario scenarios/shop_bundle.json
 ```
 
 LLM runs use model aliases from the packaged whitelist at
-`bargaining_platform/model_whitelist.v1.json`. Set separate role keys, or a shared
-fallback key; when either role has no key, the run uses the existing mock fallback:
+`bargaining_platform/model_whitelist.v1.json`. Set separate role keys or a shared key:
 
 ```powershell
 $env:SELLER_LLM_API_KEY = "seller-provider-key"
 $env:BUYER_LLM_API_KEY = "buyer-provider-key"
-python -m bargaining_platform.cli run --scenario scenarios/shop_bundle.json --agent llm `
+python -m bargaining_platform.cli run --scenario scenarios/shop_bundle.json `
   --seller-model gpt-4o-mini `
   --buyer-model gemini-2.0-flash
 ```
 
-`LLM_API_KEY` is the optional shared fallback when a role-specific key is unset.
+`LLM_API_KEY` is the optional shared key when a role-specific key is unset. Both
+roles must resolve to a key; runs are rejected when either key is missing.
 The whitelist currently includes GPT, Gemini, DeepSeek, Qwen, Kimi/Moonshot, and
 GLM/Zhipu aliases. Keys are read from the process environment and are not stored.
 The web UI loads enabled aliases from `GET /models` and role-specific prompt
@@ -58,7 +58,7 @@ make them available in the web UI. Only filenames, never prompt contents, are li
 Role-specific prompt templates can be selected at runtime:
 
 ```powershell
-python -m bargaining_platform.cli run --scenario scenarios/shop_bundle.json --agent mock `
+python -m bargaining_platform.cli run --scenario scenarios/shop_bundle.json `
   --seller-prompt prompts/seller_single.txt `
   --buyer-prompt prompts/buyer_single.txt
 ```
@@ -74,8 +74,9 @@ python -m bargaining_platform.cli experiment `
   --db-path results/baseline.db
 ```
 
-An experiment config contains `repetitions`, `scenario_path`, an optional `agent_type`, and a `variations` list. Each variation receives a stable condition ID and each repetition receives its own run ID.
-For LLM experiments, set `seller_model` and `buyer_model` at the top level or on
+An experiment config contains `repetitions`, `scenario_path`, and a `variations`
+list. Each variation receives a stable condition ID and each repetition receives
+its own run ID. Set `seller_model` and `buyer_model` at the top level or on
 each variation, or pass the equivalent `--seller-model` and `--buyer-model` CLI
 options. Model selections are part of the condition identity.
 
@@ -145,7 +146,7 @@ Each event is written on one line. Decimal monetary values are serialized as str
 
 `scenarios/shop_bundle.json` demonstrates products A and B, seller stock and price floors, buyer values and budget, legal quantity limits, reservation utilities, and a capped `discount_if_item_in_bundle` condition. The engine accepts `PROPOSE`, `COUNTER`, `ACCEPT`, and `WALK_AWAY`; acceptance commits the complete current proposal atomically.
 
-Private profiles are isolated by role. The seller's costs and floors never enter the buyer view, and the buyer's values and budget never enter the seller view. Agent output is checked against the action schema, including a required `decision_summary` on proposals. Invalid output is logged and returned to the same agent for correction without a retry limit. Proposal prices may fall outside private constraints; those constraints are checked when a proposal is accepted, and a failed acceptance ends the negotiation as `NO_DEAL`.
+Private profiles are isolated by role. The seller's costs and floors never enter the buyer view, and the buyer's values and budget never enter the seller view. Agent output is checked against the action schema, including a required `decision_summary` on proposals. Invalid output is logged and returned to the same agent for correction; five consecutive invalid outputs end the conversation, and valid output resets the retry count. Proposal prices may fall outside private constraints; those constraints are checked when a proposal is accepted, and a failed acceptance ends the negotiation as `NO_DEAL`.
 
 Event records include the current round number and are ordered by `event_id`; timestamps are not recorded. A round is one valid response from each role; invalid output and acceptance do not advance the round.
 
@@ -190,12 +191,12 @@ Install the development dependencies, then start the API with:
 uvicorn bargaining_platform.api:app --reload
 ```
 
-Start a mock run and inspect it:
+Start an LLM run and inspect it:
 
 ```powershell
 curl.exe -X POST http://127.0.0.1:8000/runs `
   -H "Content-Type: application/json" `
-  -d '{"scenario_id":"scenarios/shop_bundle.json","agent_type":"mock"}'
+  -d '{"scenario_id":"scenarios/shop_bundle.json"}'
 curl.exe http://127.0.0.1:8000/runs/RUN_ID/status
 curl.exe http://127.0.0.1:8000/runs/RUN_ID/view `
   -H "Authorization: Bearer $env:BUYER_API_SECRET"

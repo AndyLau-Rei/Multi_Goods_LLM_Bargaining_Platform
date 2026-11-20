@@ -59,13 +59,14 @@ def create_role_adapters(
     *,
     shared_key: str | None = None,
     role_keys: dict[str, str | None] | None = None,
-) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    """Return independent clients, or secret-free metadata for mock fallback."""
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return independent provider clients and secret-free model metadata."""
     if role_keys is None:
         role_keys = {role: os.getenv(env_name) for role, env_name in _ROLE_KEY_ENV.items()}
     shared_key = os.getenv("LLM_API_KEY") if shared_key is None else shared_key
     keys = {role: role_keys.get(role) or shared_key for role in _ROLE_KEY_ENV}
-    fallback = not all(keys.values())
+    if not all(keys.values()):
+        raise ValueError("MISSING_API_KEY")
     model_config: dict[str, Any] = {"version": registry_version, "roles": {}}
     for role, model in models.items():
         resolved = {
@@ -76,20 +77,8 @@ def create_role_adapters(
             "adapter_version": _ADAPTER_VERSION,
             "provider_version": "v1beta" if model["provider"] == "gemini" else "openai-compatible-v1",
         }
-        if fallback:
-            resolved["requested_model"] = resolved.copy()
-            resolved.update({
-                "public_alias": "mock",
-                "provider": "mock",
-                "model_id": "mock",
-                "base_url": None,
-                "adapter_version": "builtin-mock-v1",
-                "provider_version": "builtin",
-            })
         model_config["roles"][role] = resolved
-    model_config["execution"] = "mock_fallback" if fallback else "provider"
-    if fallback:
-        return None, model_config
+    model_config["execution"] = "provider"
 
     adapters = {}
     for role, model in models.items():

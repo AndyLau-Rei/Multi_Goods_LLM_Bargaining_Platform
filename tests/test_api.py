@@ -14,8 +14,33 @@ from bargaining_platform.scenario import load_scenario
 from bargaining_platform.storage import load_run_from_sqlite
 
 
+def _test_adapters(proposal_id="api-test"):
+    proposal = {
+        "proposal_id": proposal_id,
+        "acceptance_mode": "all_or_nothing",
+        "terms": [{"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"}],
+        "conditions": [], "decision_summary": "",
+        "original_prices": {"A": 120}, "effective_prices": {"A": 120},
+    }
+    return {
+        "seller": MockLLMAdapter([json.dumps({
+            "action_type": "PROPOSE", "proposal_id": proposal_id, "proposal": proposal,
+        })]),
+        "buyer": MockLLMAdapter([json.dumps({"action_type": "ACCEPT", "proposal_id": proposal_id})]),
+    }
+
+
 def test_start_run_and_get_status(tmp_path, monkeypatch):
     monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
+    monkeypatch.setattr(api_module, "create_role_adapters", lambda *_: (_test_adapters(), {"execution": "test"}))
+
+    def test_scenario(path):
+        scenario = load_scenario(path)
+        scenario["private_profiles"]["buyer"]["reservation_utility"] = 0
+        scenario["private_profiles"]["seller"]["reservation_utility"] = 0
+        return scenario
+
+    monkeypatch.setattr(api_module, "load_scenario", test_scenario)
     scheduled = []
 
     def capture_task(_background_tasks, function, *args, **kwargs):
@@ -25,7 +50,7 @@ def test_start_run_and_get_status(tmp_path, monkeypatch):
     with patch.object(BackgroundTasks, "add_task", capture_task):
         response = client.post(
             "/runs",
-            json={"scenario_id": "scenarios/shop_bundle.json", "agent_type": "mock"},
+            json={"scenario_id": "scenarios/shop_bundle.json"},
         )
     assert response.status_code == 202
     run_id = response.json()["run_id"]
@@ -50,6 +75,7 @@ def test_start_run_and_get_status(tmp_path, monkeypatch):
 
 def test_background_failure_marks_run_error(tmp_path, monkeypatch):
     monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
+    monkeypatch.setattr(api_module, "create_role_adapters", lambda *_: (_test_adapters(), {"execution": "test"}))
 
     def fail_run(*args, **kwargs):
         raise RuntimeError("generation failed")
@@ -64,7 +90,7 @@ def test_background_failure_marks_run_error(tmp_path, monkeypatch):
     with patch.object(BackgroundTasks, "add_task", capture_task):
         response = client.post(
             "/runs",
-            json={"scenario_id": "scenarios/shop_bundle.json", "agent_type": "mock"},
+            json={"scenario_id": "scenarios/shop_bundle.json"},
         )
     run_id = response.json()["run_id"]
     function, args, kwargs = scheduled.pop()
@@ -73,6 +99,13 @@ def test_background_failure_marks_run_error(tmp_path, monkeypatch):
     status = client.get(f"/runs/{run_id}/status")
     assert status.status_code == 200
     assert status.json()["status"] == "ERROR"
+    assert run_id not in api_module._active_runs
+    saved = load_run_from_sqlite(run_id, tmp_path / "runs.db")
+    assert saved["outcome_status"] == "ERROR"
+    assert saved["outcome"] == {"status": "ERROR"}
+    events = client.get(f"/runs/{run_id}/events")
+    assert events.status_code == 200
+    assert events.json()["events"] == []
 
 
 def test_in_progress_status_and_events(monkeypatch):
@@ -103,10 +136,11 @@ def test_view_privacy_isolation(tmp_path, monkeypatch):
     monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
     monkeypatch.setenv("BUYER_API_SECRET", "buyer-secret")
     monkeypatch.setenv("SELLER_API_SECRET", "seller-secret")
+    monkeypatch.setattr(api_module, "create_role_adapters", lambda *_: (_test_adapters(), {"execution": "test"}))
     client = TestClient(app)
     run_id = client.post(
         "/runs",
-        json={"scenario_id": "scenarios/shop_bundle.json", "agent_type": "mock"},
+        json={"scenario_id": "scenarios/shop_bundle.json"},
     ).json()["run_id"]
 
     response = client.get(
@@ -165,6 +199,7 @@ def test_scenarios_endpoint_lists_available_scenarios():
 
 def test_prompt_selection_is_role_scoped_and_persisted(tmp_path, monkeypatch):
     monkeypatch.setenv("BARGAINING_DB_PATH", str(tmp_path / "runs.db"))
+    monkeypatch.setattr(api_module, "create_role_adapters", lambda *_: (_test_adapters("prompt-proposal"), {"execution": "test"}))
     client = TestClient(app)
     choices = client.get("/prompts")
     assert choices.status_code == 200
@@ -244,7 +279,6 @@ def test_model_whitelist_endpoint_and_run_selection_validation(tmp_path, monkeyp
 
     unknown = client.post("/runs", json={
         "scenario_id": "scenarios/shop_bundle.json",
-        "agent_type": "llm",
         "seller_model": "unlisted-model",
     })
     assert unknown.status_code == 400
@@ -253,23 +287,18 @@ def test_model_whitelist_endpoint_and_run_selection_validation(tmp_path, monkeyp
 
     with_key = client.post("/runs", json={
         "scenario_id": "scenarios/shop_bundle.json",
-        "agent_type": "llm",
         "api_key": "must-not-be-accepted",
     })
     assert with_key.status_code == 422
     assert "must-not-be-accepted" not in with_key.text
 
-    fallback = client.post("/runs", json={
+    missing_key = client.post("/runs", json={
         "scenario_id": "scenarios/shop_bundle.json",
-        "agent_type": "llm",
         "seller_model": "gpt-4o-mini",
         "buyer_model": "gemini-2.0-flash",
     })
-    assert fallback.status_code == 202
-    saved = load_run_from_sqlite(fallback.json()["run_id"], tmp_path / "runs.db")
-    assert saved["model_config"]["execution"] == "mock_fallback"
-    assert saved["model_config"]["roles"]["seller"]["requested_model"]["public_alias"] == "gpt-4o-mini"
-    assert saved["model_config"]["roles"]["buyer"]["requested_model"]["public_alias"] == "gemini-2.0-flash"
+    assert missing_key.status_code == 400
+    assert missing_key.json()["detail"] == "MISSING_API_KEY"
 
 
 def test_events_show_authoritative_effective_bundle_price(tmp_path, monkeypatch):
@@ -306,7 +335,7 @@ def test_events_show_authoritative_effective_bundle_price(tmp_path, monkeypatch)
     }
     run_llm_negotiation(
         scenario, actions, run_id="discounted",
-        db_path=tmp_path / "runs.db", mock_demo=True,
+        db_path=tmp_path / "runs.db",
     )
 
     response = TestClient(app).get("/runs/discounted/events")
@@ -366,7 +395,7 @@ def test_api_round_display_with_retries(tmp_path, monkeypatch):
     }
     run_llm_negotiation(
         scenario, adapters, run_id="retry-round",
-        db_path=tmp_path / "runs.db", mock_demo=True,
+        db_path=tmp_path / "runs.db",
     )
     response = TestClient(app).get("/runs/retry-round/events")
     assert response.status_code == 200
@@ -390,7 +419,7 @@ def test_api_schema_corrections_do_not_emit_false_terminal_transition(tmp_path, 
     }
     run_llm_negotiation(
         scenario, adapters, run_id="empty-actions",
-        db_path=tmp_path / "runs.db", mock_demo=True,
+        db_path=tmp_path / "runs.db",
     )
     response = TestClient(app).get("/runs/empty-actions/events")
     assert response.status_code == 200

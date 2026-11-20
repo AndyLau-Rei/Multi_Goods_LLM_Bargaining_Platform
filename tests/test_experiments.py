@@ -5,27 +5,41 @@ from types import SimpleNamespace
 import pytest
 
 from bargaining_platform import experiments as experiment_module
+from bargaining_platform.model_adapter import MockLLMAdapter
 from bargaining_platform.experiments import ExperimentRunner, condition_id_for
 
 
-def test_experiment_matrix_runs(tmp_path):
+def test_experiment_matrix_runs(tmp_path, monkeypatch):
     config = {
         "repetitions": 2,
         "scenario_path": "scenarios/shop_bundle.json",
         "variations": [
-            {"agent_type": "mock", "private_profiles": {"buyer": {"budget": 150}}},
-            {"agent_type": "mock", "private_profiles": {"buyer": {"budget": 200}}},
+            {"private_profiles": {"buyer": {"budget": 150}}},
+            {"private_profiles": {"buyer": {"budget": 200}}},
         ],
     }
+    proposal = {
+        "proposal_id": "matrix-proposal",
+        "acceptance_mode": "all_or_nothing",
+        "terms": [{"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"}],
+        "conditions": [], "decision_summary": "",
+        "original_prices": {"A": 120}, "effective_prices": {"A": 120},
+    }
+    def adapters(*_args):
+        return ({
+            "seller": MockLLMAdapter([json.dumps({
+                "action_type": "PROPOSE", "proposal_id": "matrix-proposal", "proposal": proposal,
+            })]),
+            "buyer": MockLLMAdapter([json.dumps({"action_type": "WALK_AWAY"})]),
+        }, {"execution": "test"})
+
+    monkeypatch.setattr(experiment_module, "create_role_adapters", adapters)
     database = tmp_path / "runs.db"
     results = ExperimentRunner(config, db_path=database).run()
 
     assert len(results) == 4
     assert len({result.run_id for result in results}) == 4
-    assert {result.condition_id for result in results} == {
-        condition_id_for(config["variations"][0]),
-        condition_id_for(config["variations"][1]),
-    }
+    assert len({result.condition_id for result in results}) == 2
     with sqlite3.connect(database) as connection:
         rows = connection.execute("SELECT run_id, condition_id FROM runs").fetchall()
     assert len(rows) == 4
@@ -35,7 +49,7 @@ def test_experiment_matrix_runs(tmp_path):
 
 
 def test_condition_ids_are_stable():
-    variation = {"agent_type": "mock", "private_profiles": {"buyer": {"budget": 150}}}
+    variation = {"private_profiles": {"buyer": {"budget": 150}}}
     assert condition_id_for(variation) == condition_id_for(json.loads(json.dumps(variation)))
 
 
@@ -54,7 +68,6 @@ def test_experiment_config_selects_models_per_role(tmp_path, monkeypatch):
     runner = ExperimentRunner({
         "repetitions": 1,
         "scenario_path": "scenarios/shop_bundle.json",
-        "agent_type": "llm",
         "seller_model": "gpt-4o-mini",
         "buyer_model": "gemini-2.0-flash",
         "variations": [{}],
@@ -73,7 +86,6 @@ def test_blank_cli_model_alias_is_rejected_instead_of_using_config_default(tmp_p
     runner = ExperimentRunner({
         "repetitions": 1,
         "scenario_path": "scenarios/shop_bundle.json",
-        "agent_type": "llm",
         "seller_model": "gpt-4o-mini",
         "variations": [{}],
     }, seller_model="", db_path=tmp_path / "unused.db")

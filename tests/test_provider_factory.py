@@ -56,22 +56,17 @@ def test_whitelist_rejects_unknown_and_disabled_aliases(tmp_path, monkeypatch, a
         provider_factory.resolve_models(alias, "gemini-test")
 
 
-def test_missing_role_key_uses_secret_free_mock_fallback(tmp_path, monkeypatch):
+def test_missing_role_key_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(provider_factory, "_WHITELIST_PATH", _registry(tmp_path))
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     models, version = provider_factory.resolve_models("gpt-test", "gemini-test")
 
-    adapters, metadata = provider_factory.create_role_adapters(
-        models,
-        version,
-        role_keys={"seller": "seller-secret", "buyer": None},
-    )
-
-    assert adapters is None
-    assert metadata["execution"] == "mock_fallback"
-    assert metadata["roles"]["seller"]["provider"] == "mock"
-    assert metadata["roles"]["seller"]["requested_model"]["public_alias"] == "gpt-test"
-    assert "seller-secret" not in json.dumps(metadata)
+    with pytest.raises(ValueError, match="^MISSING_API_KEY$"):
+        provider_factory.create_role_adapters(
+            models,
+            version,
+            role_keys={"seller": "seller-secret", "buyer": None},
+        )
 
 
 def test_shared_key_fills_both_roles(tmp_path, monkeypatch):

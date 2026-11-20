@@ -47,9 +47,9 @@
 ### Phase 4 Decisions (LLM Integration)
 
 - **Runner Isolation**: The end-to-end agent loop is orchestrated in `runner.py`, which chains `make_private_view -> render_prompt -> adapter.generate -> parse_action -> engine.step`. The engine remains completely agnostic to LLM implementations.
-- **Deterministic Fallback & Mock Demo**: The CLI supports `--agent {scripted, llm, mock}`. If `LLM_API_KEY` is missing, the runner defaults to `MockLLMAdapter`. The mock demo uses an in-memory copy of the scenario with `reservation_utility` set to 0 to guarantee a happy-path `AGREEMENT` demonstration without mutating the base scenario file.
+- **LLM-Only Negotiation**: CLI, API, experiments, and viewer runs use configured LLM providers. Each role must resolve a role-specific key or the shared `LLM_API_KEY`; missing credentials are rejected instead of starting a mock run. Queued adapters are test doubles only.
 - **Metadata Logging**: Every LLM generation logs a prompt hash, length, template ID/version, model/provider, token usage, and latency in compact event metadata. Newly added conversation messages for each generation, action schema, and raw model output are stored in the `prompts` table keyed by run and event. The first row includes the initial instructions; later rows do not repeat earlier messages. Prompt records remain separate from event metadata and the public transcript.
-- **Parser Failure Handling**: Invalid agent output is caught by `parse_action`, logged, and returned to the same agent for correction without a retry limit. Proposal schema requires `decision_summary`; private proposal constraints are checked on acceptance, and a failed acceptance ends as `NO_DEAL`.
+- **Parser Failure Handling**: Invalid agent output is caught by `parse_action`, logged, and returned to the same agent for correction. Five consecutive invalid outputs end the conversation; a valid output resets the retry count. Proposal schema requires `decision_summary`; private proposal constraints are checked on acceptance, and a failed acceptance ends as `NO_DEAL`.
 - **Database Schema Migration**: To support new columns (like `metadata_json`) while maintaining backward compatibility, schema migration (`_create_schema`) MUST be executed before reading persisted runs, ensuring pre-T-404 databases can still be replayed safely.
 - **Replay Safety**: Replay logic must handle missing `parsed_action` fields gracefully for events that represent parser failures (e.g., `MALFORMED_JSON`).
 
@@ -57,6 +57,7 @@
 
 - **Experiment Identity**: Condition IDs hash the canonical variation plus a config namespace, so identical overrides in different experiments remain distinct. Each repetition gets a unique run ID and is persisted separately.
 - **Comparison Scope**: The compare command accepts exactly one variation per config and assigns separate baseline and treatment namespaces. It rejects larger matrices rather than silently omitting conditions from the report.
+- **Scenario Checking**: The `check-scenario` CLI command uses the same scenario loader and validator as negotiations, so malformed JSON, missing fields, and invalid field values are rejected before a run.
 - **Persisted Metrics**: Aggregate metrics read SQLite runs and structured events; bundle prices are recomputed from the saved proposal and scenario instead of trusting pre-validation action payload prices. Average discount size means the mean per-unit discount on discounted lines.
 - **Failure Analysis**: Failure reports classify structured validation errors and terminal actions, linking each finding to its event and round. Parser, hard-constraint, bundle, walk-away, and timeout failures are reported without interpreting model prose.
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from .experiments import ExperimentRunner, compare_experiment_configs
 from .metrics import calculate_metrics, format_failure_report, generate_failure_report
 from .provider_factory import create_role_adapters, resolve_models
-from .runner import default_mock_adapters, run_llm_negotiation
+from .runner import run_llm_negotiation
 from .scenario import load_scenario
 from .storage import Event, export_run_to_jsonl, load_run_from_sqlite, replay_run
 
@@ -24,12 +24,6 @@ def _parser() -> argparse.ArgumentParser:
 
     run = commands.add_parser("run", help="Run one negotiation from a scenario.")
     run.add_argument("--scenario", required=True, help="Path to the scenario JSON file.")
-    run.add_argument(
-        "--agent",
-        choices=("scripted", "llm", "mock"),
-        default="scripted",
-        help="Agent mode (default: scripted).",
-    )
     run.add_argument("--seller-prompt", help="Optional seller prompt template path.")
     run.add_argument("--buyer-prompt", help="Optional buyer prompt template path.")
     run.add_argument("--seller-model", help="Seller model whitelist alias (LLM mode).")
@@ -38,6 +32,11 @@ def _parser() -> argparse.ArgumentParser:
         "--db-path", default=None,
         help="SQLite output path (default: results/runs.db).",
     )
+
+    check = commands.add_parser(
+        "check-scenario", help="Validate a scenario JSON file without running a negotiation."
+    )
+    check.add_argument("--scenario", required=True, help="Path to the scenario JSON file.")
 
     experiment = commands.add_parser("experiment", help="Run a batch experiment configuration.")
     experiment.add_argument("--config", required=True, help="Experiment configuration JSON path.")
@@ -93,30 +92,12 @@ def _parser() -> argparse.ArgumentParser:
 
 def _run(args: argparse.Namespace) -> int:
     scenario = load_scenario(args.scenario)
-    model_config = None
-    if args.agent == "scripted":
-        if args.seller_model is not None or args.buyer_model is not None:
-            raise ValueError("MODEL_SELECTION_REQUIRES_LLM")
-        print(
-            f"Loaded scenario: {scenario['scenario_id']} "
-            f"with {len(scenario['catalog'])} catalog items"
-        )
-        return 0
-    if args.agent == "llm":
-        models, registry_version = resolve_models(args.seller_model, args.buyer_model)
-        adapters, model_config = create_role_adapters(models, registry_version)
-    else:
-        if args.seller_model is not None or args.buyer_model is not None:
-            raise ValueError("MODEL_SELECTION_REQUIRES_LLM")
-        adapters = None
-    use_mock = args.agent == "mock" or adapters is None
-    if use_mock:
-        adapters = default_mock_adapters()
+    models, registry_version = resolve_models(args.seller_model, args.buyer_model)
+    adapters, model_config = create_role_adapters(models, registry_version)
     engine = run_llm_negotiation(
         scenario,
         adapters,
         db_path=args.db_path or "results/runs.db",
-        mock_demo=use_mock,
         seller_prompt_path=args.seller_prompt,
         buyer_prompt_path=args.buyer_prompt,
         model_config=model_config,
@@ -138,10 +119,17 @@ def main(argv: list[str] | None = None) -> int:
     if raw_args and raw_args[0].startswith("-") and "--scenario" in raw_args:
         raw_args.insert(0, "run")
     args = _parser().parse_args(raw_args)
-    database = args.db_path or "results/runs.db"
+    database = getattr(args, "db_path", None) or "results/runs.db"
     try:
         if args.command == "run":
             return _run(args)
+        if args.command == "check-scenario":
+            scenario = load_scenario(args.scenario)
+            print(
+                f"Scenario is valid: {scenario['scenario_id']} "
+                f"({len(scenario['catalog'])} catalog items)"
+            )
+            return 0
         if args.command == "experiment":
             runner = ExperimentRunner(
                 args.config,

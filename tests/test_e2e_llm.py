@@ -138,7 +138,7 @@ def test_invalid_outputs_are_private_until_a_valid_retry(tmp_path):
 
 
 def test_invalid_output_retry_exhaustion_ends_invalid_action(tmp_path):
-    seller = MockLLMAdapter(["bad one", "bad two", "bad three"])
+    seller = MockLLMAdapter(["bad one", "bad two", "bad three", "bad four", "bad five"])
     buyer = MockLLMAdapter([])
 
     engine = run_llm_negotiation(
@@ -151,7 +151,7 @@ def test_invalid_output_retry_exhaustion_ends_invalid_action(tmp_path):
     assert engine.state.outcome.status == "INVALID_ACTION"
     assert engine.state.public_transcript == []
     assert [event.raw_output for event in engine.event_logger.events if event.event_type == "ACTION_ATTEMPT"] == [
-        "bad one", "bad two", "bad three",
+        "bad one", "bad two", "bad three", "bad four", "bad five",
     ]
     assert engine.event_logger.events[-1].state_transition_summary == (
         "Game ended: invalid action retry exhausted"
@@ -166,6 +166,8 @@ def test_retry_counter_resets_after_valid_action_and_replays_later_exhaustion(tm
         "first invalid",
         "second invalid",
         "third invalid",
+        "fourth invalid",
+        "fifth invalid",
     ])
     buyer = MockLLMAdapter([
         '{"action_type":"COUNTER",',
@@ -180,13 +182,13 @@ def test_retry_counter_resets_after_valid_action_and_replays_later_exhaustion(tm
     )
 
     assert engine.state.outcome.status == "INVALID_ACTION"
-    assert engine.state.invalid_attempts == 3
+    assert engine.state.invalid_attempts == 5
     assert [
         event.raw_output for event in engine.event_logger.events
         if event.event_type == "ACTION_ATTEMPT"
         and event.actor == "seller"
         and not event.validation_result["ok"]
-    ] == ["first invalid", "second invalid", "third invalid"]
+    ] == ["first invalid", "second invalid", "third invalid", "fourth invalid", "fifth invalid"]
     transition = engine.event_logger.events[-1]
     assert transition.state_transition_summary == "Game ended: invalid action retry exhausted"
     assert transition.round_number == 2
@@ -274,7 +276,7 @@ def test_llm_metadata_logging(tmp_path):
         )
         assert isinstance(event.raw_output, str) and event.raw_output
         assert event.metadata["model_version"] == "mock"
-        assert event.metadata["provider"] == "mock"
+        assert event.metadata["provider"] == "custom"
         assert event.metadata["prompt_template_id"] == f"{event.actor}_multi.txt"
         assert event.metadata["prompt_version"]
         assert event.metadata["prompt_hash"] == hashlib.sha256(prompt.encode("utf-8")).hexdigest()

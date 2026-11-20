@@ -19,7 +19,7 @@ Build a reproducible platform in which two LLM agents negotiate over multiple pr
 - Keep private role profiles separate from the public scenario and transcript.
 - Never expose an agent's hidden costs, values, reservation utility, private notes, or validation details to the opponent.
 - Treat every model response as untrusted input. Validate schema, role permissions, item IDs, quantities, units, prices, conditions, inventory, and hard constraints in deterministic code.
-- Do not silently repair invalid agent output. Check its schema, log the attempt, and ask the same agent to correct it without a retry limit. Check private proposal constraints on acceptance; failed acceptance ends as `NO_DEAL`.
+- Do not silently repair invalid agent output. Check its schema, log the attempt, and ask the same agent to correct it. End the conversation after five consecutive invalid outputs; reset that agent's retry count after valid output. Check private proposal constraints on acceptance; failed acceptance ends as `NO_DEAL`.
 - Do not interpret bundle conditions from free-form prose. Conditions must be typed data.
 
 ### Negotiation rules
@@ -36,6 +36,7 @@ Build a reproducible platform in which two LLM agents negotiate over multiple pr
 
 - Keep the first implementation synchronous and backend-first.
 - Separate model generation, prompt construction, parsing, validation, state transitions, utility calculation, and storage.
+- Run negotiations only with configured LLM providers; do not add scripted or mock negotiation modes or credential fallbacks.
 - Prefer a small Python engine with SQLite and JSONL export. Add an API or UI after deterministic engine behavior is stable.
 - Use structured output or function calling when supported by the selected model provider.
 - Every run must record scenario, prompt, model, and configuration versions, public transcript, parsed actions, validation results, private decision summaries, outcome, and metrics.
@@ -49,7 +50,8 @@ The implementation is acceptable when all of the following hold:
 - A buyer can accept only the current proposal ID, and acceptance commits the full package atomically.
 - Invalid items, quantities, prices, conditions, inventory, and hard-constraint violations are rejected deterministically.
 - Each agent receives only its private profile, permitted public catalog data, current proposal, and public transcript.
-- Maximum-round, walk-away, and no-deal outcomes are persisted; invalid attempts are logged without ending a run.
+- Scenario files are checked for valid JSON, required fields, and field constraints before a run starts.
+- Maximum-round, walk-away, no-deal, retry-exhaustion, and runtime-error outcomes are persisted; five consecutive invalid attempts end a run, while valid output resets that agent's retry count.
 - A completed run can be replayed from versioned configuration and its action log.
 - Metrics include agreement rate, joint and role-specific utility, constraint compliance, rounds, concessions, bundle frequency, discount size, retries, and termination reason.
 - A deterministic test suite covers normal trade, no-deal, bundle success, missing bundle item, invalid discount, stale proposal ID, excess quantity, and private-information leakage.

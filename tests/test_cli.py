@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -49,7 +50,7 @@ def test_run_cli_routes_role_model_aliases(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(cli, "run_llm_negotiation", run)
     assert main([
-        "run", "--scenario", "unused.json", "--agent", "llm",
+        "run", "--scenario", "unused.json",
         "--seller-model", "gpt-test", "--buyer-model", "gemini-test",
         "--db-path", str(tmp_path / "runs.db"),
     ]) == 0
@@ -57,3 +58,22 @@ def test_run_cli_routes_role_model_aliases(tmp_path, monkeypatch, capsys):
     assert captured["aliases"] == ("gpt-test", "gemini-test")
     assert captured["run_kwargs"]["model_config"] == {"roles": {}}
     assert "Completed negotiation" in capsys.readouterr().out
+
+
+def test_check_scenario_command_accepts_valid_and_rejects_missing_fields(tmp_path, capsys):
+    import json
+
+    valid_path = tmp_path / "scenario.json"
+    valid_path.write_text(Path("scenarios/shop_bundle.json").read_text(encoding="utf-8"), encoding="utf-8")
+    assert main(["check-scenario", "--scenario", str(valid_path)]) == 0
+    assert "Scenario is valid" in capsys.readouterr().out
+
+    invalid_data = json.loads(valid_path.read_text(encoding="utf-8"))
+    del invalid_data["private_profiles"]["buyer"]["budget"]
+    valid_path.write_text(json.dumps(invalid_data), encoding="utf-8")
+    assert main(["check-scenario", "--scenario", str(valid_path)]) == 1
+    assert "Missing required key: private_profiles.buyer.budget" in capsys.readouterr().out
+
+    valid_path.write_text("{invalid json", encoding="utf-8")
+    assert main(["check-scenario", "--scenario", str(valid_path)]) == 1
+    assert "Invalid scenario JSON" in capsys.readouterr().out

@@ -127,7 +127,7 @@ Define one round as one valid proposal/response pair and persist action count as
 
 - Validate schema, role permissions, item IDs, quantities, units, allowed terms, and bundle conditions.
 - Do not silently repair invalid proposals.
-- Return a short machine-readable error and ask the same agent to correct invalid output without a retry limit. Proposal schema requires `decision_summary`.
+- Return a short machine-readable error and ask the same agent to correct invalid output. End the conversation after five consecutive invalid outputs; reset that agent's retry count after valid output. Proposal schema requires `decision_summary`.
 - Log every attempt, including rejected actions, without exposing private constraints.
 
 At final acceptance, check both roles' hard constraints and reservation utility. If acceptance violates them, do not commit the agreement; record the attempted violation and end as `NO_DEAL`. Never disclose the other party's private bound in an error message.
@@ -191,7 +191,7 @@ Start with Python and its standard library for the engine and SQLite. Add a prov
 
 - Define scenario, profile, term, action, offer, and outcome schemas.
 - Implement turn transitions and hard-constraint validation.
-- Use scripted agents to verify alternation, acceptance, counteroffers, and termination.
+- Use test adapters to verify alternation, acceptance, counteroffers, and termination.
 
 ### Phase 2 — multi-item and bundle rules
 

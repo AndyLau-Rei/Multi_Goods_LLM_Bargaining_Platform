@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from .engine import NegotiationEngine
-from .model_adapter import BaseLLMAdapter, GenerationResult, MockLLMAdapter
+from .model_adapter import BaseLLMAdapter, GenerationResult
 from .models import Action, GameState, Outcome, ValidationResult
 from .prompt_builder import (
     default_prompt_path,
@@ -21,7 +21,7 @@ from .storage import DEFAULT_DB_PATH, save_run_to_sqlite
 from .validator import parse_action
 
 
-_MAX_INVALID_ACTION_ATTEMPTS = 3
+_MAX_INVALID_ACTION_ATTEMPTS = 5
 
 
 class LLMAgent:
@@ -90,7 +90,6 @@ def run_llm_negotiation(
     *,
     run_id: str | None = None,
     db_path: str | Path = DEFAULT_DB_PATH,
-    mock_demo: bool = False,
     condition_id: str | None = None,
     seller_prompt_path: str | Path | None = None,
     buyer_prompt_path: str | Path | None = None,
@@ -98,10 +97,6 @@ def run_llm_negotiation(
     model_config: dict | None = None,
 ) -> NegotiationEngine:
     """Run role-scoped generation until a terminal outcome and persist the run."""
-    if mock_demo:
-        scenario = deepcopy(scenario)
-        for profile in scenario["private_profiles"].values():
-            profile["reservation_utility"] = 0
     engine = NegotiationEngine(scenario)
     run_id = run_id or f"run-{uuid.uuid4().hex}"
     engine.run_id = run_id
@@ -228,62 +223,19 @@ def run_llm_negotiation(
 
 
 def _adapter_model_config(adapter: BaseLLMAdapter) -> dict:
-    provider = getattr(adapter, "provider", "mock" if isinstance(adapter, MockLLMAdapter) else "custom")
+    provider = getattr(adapter, "provider", "custom")
     model_id = getattr(adapter, "model", getattr(adapter, "model_version", type(adapter).__name__))
     return {
         "public_alias": model_id,
         "provider": provider,
         "model_id": model_id,
         "base_url": getattr(adapter, "base_url", None),
-        "adapter_version": "builtin-mock-v1" if isinstance(adapter, MockLLMAdapter) else "1",
+        "adapter_version": "1",
     }
 
 
 def _prompt_version(prompt_path: str | Path) -> str:
     return hashlib.sha256(Path(prompt_path).read_bytes()).hexdigest()
-
-
-def default_mock_adapters() -> dict[str, MockLLMAdapter]:
-    """Return deterministic role queues for local, network-free demonstrations."""
-    standalone = {
-        "acceptance_mode": "all_or_nothing",
-        "terms": [
-            {"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"},
-        ],
-        "conditions": [],
-        "decision_summary": "",
-        "original_prices": {"A": 120},
-        "effective_prices": {"A": 120},
-    }
-    bundle = {
-        "acceptance_mode": "all_or_nothing",
-        "terms": [
-            {"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"},
-            {"type": "purchase", "item_id": "B", "quantity": 1, "unit_price": 60, "unit": "piece"},
-        ],
-        "conditions": [
-            {
-                "type": "discount_if_item_in_bundle",
-                "discounted_item_id": "A",
-                "discount_per_unit": 20,
-                "required_item_id": "B",
-                "minimum_required_quantity": 1,
-            }
-        ],
-        "decision_summary": "",
-        "original_prices": {"A": 120, "B": 60},
-        "effective_prices": {"A": 120, "B": 60},
-    }
-    return {
-        "seller": MockLLMAdapter([
-            json.dumps({"action_type": "PROPOSE", "proposal": standalone}),
-            json.dumps({"action_type": "COUNTER", "proposal": bundle}),
-        ]),
-        "buyer": MockLLMAdapter([
-            json.dumps({"action_type": "COUNTER", "proposal": bundle}),
-            json.dumps({"action_type": "ACCEPT"}),
-        ]),
-    }
 
 
 def _action_schema() -> dict:

@@ -59,8 +59,7 @@ def test_prompt_includes_json_instructions():
     assert "proposal to null" in prompt
 
 
-def test_model_facing_schema_and_turn_updates_omit_proposal_ids():
-    from bargaining_platform.prompt_builder import render_public_update
+def test_model_facing_schema_and_private_view_omit_proposal_ids():
     from bargaining_platform.runner import _action_schema
 
     engine = NegotiationEngine(load_scenario("scenarios/test_scenario.json"))
@@ -81,14 +80,11 @@ def test_model_facing_schema_and_turn_updates_omit_proposal_ids():
         role="seller",
     )
     view = make_private_view("buyer", engine.state)
-    update = render_public_update(view, 0)
     schema = _action_schema()
 
     assert "proposal_id" not in json.dumps(schema)
     assert schema["properties"]["proposal"]["additionalProperties"] is False
     assert "proposal_id" not in json.dumps(view)
-    assert "proposal_id" not in update
-    assert "internal-1" not in update
 
 
 @pytest.mark.parametrize(

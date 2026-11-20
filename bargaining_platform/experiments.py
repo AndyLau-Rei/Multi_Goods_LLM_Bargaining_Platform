@@ -10,10 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .model_adapter import MockLLMAdapter
 from .models import validate_scenario
 from .provider_factory import create_role_adapters, resolve_models
-from .runner import default_mock_adapters, run_llm_negotiation
+from .runner import run_llm_negotiation
 from .scenario import load_scenario
 from .storage import DEFAULT_DB_PATH
 
@@ -94,11 +93,9 @@ class ExperimentRunner:
                 if self.buyer_model is not None
                 else variation.get("buyer_model", self.config.get("buyer_model"))
             )
-            agent_type = variation.get("agent_type", self.config.get("agent_type", "mock"))
-            if agent_type == "llm":
-                resolved, _ = resolve_models(seller_model, buyer_model)
-                seller_model = resolved["seller"]["alias"]
-                buyer_model = resolved["buyer"]["alias"]
+            models, registry_version = resolve_models(seller_model, buyer_model)
+            seller_model = models["seller"]["alias"]
+            buyer_model = models["buyer"]["alias"]
             condition = dict(variation)
             if seller_model is not None:
                 condition["seller_model"] = seller_model
@@ -108,21 +105,18 @@ class ExperimentRunner:
             scenario = deepcopy(base_scenario)
             overrides = {
                 key: value for key, value in variation.items()
-                if key not in {"agent_type", "seller_model", "buyer_model"}
+                if key not in {"seller_model", "buyer_model"}
             }
             _deep_merge(scenario, overrides)
             validate_scenario(scenario)
             for repetition in range(1, self.config["repetitions"] + 1):
                 run_id = f"{condition_id}-rep-{repetition}-{uuid.uuid4().hex[:8]}"
-                adapters, mock_demo, model_config = self._adapters(
-                    agent_type, scenario, seller_model, buyer_model
-                )
+                adapters, model_config = create_role_adapters(models, registry_version)
                 engine = run_llm_negotiation(
                     deepcopy(scenario),
                     adapters,
                     run_id=run_id,
                     db_path=self.db_path,
-                    mock_demo=mock_demo,
                     condition_id=condition_id,
                     seller_prompt_path=self.seller_prompt_path,
                     buyer_prompt_path=self.buyer_prompt_path,
@@ -143,101 +137,12 @@ class ExperimentRunner:
             return path
         return self.config_path.parent / path
 
-    @staticmethod
-    def _adapters(
-        agent_type: str,
-        scenario: dict,
-        seller_model: str | None = None,
-        buyer_model: str | None = None,
-    ) -> tuple[dict, bool, dict | None]:
-        if agent_type not in {"mock", "llm", "scripted"}:
-            raise ValueError(f"Unsupported agent_type: {agent_type}")
-        if agent_type == "llm":
-            models, version = resolve_models(seller_model, buyer_model)
-            adapters, model_config = create_role_adapters(models, version)
-            if adapters is not None:
-                return adapters, False, model_config
-            return _budget_safe_mock_adapters(scenario), True, model_config
-        if seller_model is not None or buyer_model is not None:
-            raise ValueError("MODEL_SELECTION_REQUIRES_LLM")
-        if (
-            agent_type == "mock"
-            and scenario.get("bundle_rules", {}).get("max_discount_per_unit") == 0
-        ):
-            return _no_bundle_mock_adapters(), True, None
-        if agent_type == "mock" and _buyer_budget(scenario) >= 160:
-            return default_mock_adapters(), True, None
-        return _budget_safe_mock_adapters(scenario), True, None
-
-
 def _deep_merge(target: dict, overrides: dict) -> None:
     for key, value in overrides.items():
         if isinstance(value, dict) and isinstance(target.get(key), dict):
             _deep_merge(target[key], value)
         else:
             target[key] = deepcopy(value)
-
-
-def _buyer_budget(scenario: dict) -> float:
-    return float(scenario["private_profiles"]["buyer"]["budget"])
-
-
-def _budget_safe_mock_adapters(scenario: dict) -> dict[str, MockLLMAdapter]:
-    budget = _buyer_budget(scenario)
-    if budget < 80:
-        return {
-            "seller": MockLLMAdapter([
-                json.dumps({"action_type": "WALK_AWAY"})
-            ]),
-            "buyer": MockLLMAdapter([]),
-        }
-    price = min(120, budget)
-    proposal = {
-        "acceptance_mode": "all_or_nothing",
-        "terms": [
-            {
-                "type": "purchase", "item_id": "A", "quantity": 1,
-                "unit_price": price, "unit": "piece",
-            }
-        ],
-        "conditions": [],
-        "decision_summary": "",
-        "original_prices": {"A": price},
-        "effective_prices": {"A": price},
-    }
-    return {
-        "seller": MockLLMAdapter([
-            json.dumps({
-                "action_type": "PROPOSE", "proposal": proposal,
-            })
-        ]),
-        "buyer": MockLLMAdapter([
-            json.dumps({"action_type": "ACCEPT"})
-        ]),
-    }
-
-
-def _no_bundle_mock_adapters() -> dict[str, MockLLMAdapter]:
-    proposal = {
-        "acceptance_mode": "all_or_nothing",
-        "terms": [
-            {"type": "purchase", "item_id": "A", "quantity": 1, "unit_price": 120, "unit": "piece"}
-        ],
-        "conditions": [],
-        "decision_summary": "",
-        "original_prices": {"A": 120},
-        "effective_prices": {"A": 120},
-    }
-    return {
-        "seller": MockLLMAdapter([
-            json.dumps({
-                "action_type": "PROPOSE", "proposal": proposal,
-            })
-        ]),
-        "buyer": MockLLMAdapter([
-            json.dumps({"action_type": "ACCEPT"})
-        ]),
-    }
 
 
 def compare_experiment_configs(

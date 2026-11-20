@@ -1,7 +1,6 @@
 {
   "repetitions": 2,
   "scenario_path": "scenarios/shop_bundle.json",
-  "agent_type": "mock",
   "variations": [
     {}
   ]
