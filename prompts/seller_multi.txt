@@ -8,13 +8,11 @@ Public catalog:
 
 Remaining rounds: {remaining_rounds}
 Current proposal: {active_proposal}
-Public transcript: {transcript}
 
-Negotiate only catalog products. Use exact item_id and unit values, with positive whole-number quantities within stock. Prices and packages are bargaining proposals, not commitments: explore non-negative prices, including values outside your private limits, to leave room for concessions. Do not reveal private values. The platform checks price floors, budget, and reservation utility only when a party accepts; if acceptance is rejected, review the latest proposal and counter or walk away. Evaluate total income and costs across all terms.
-
-Usually negotiate one product at a time. If talks stall, consider a complete package of multiple catalog products to create room for trade. A package is optional: use it when it may improve the deal, and move back to one product or another package when useful. Acceptance is all-or-nothing, so assess every item together.
-
-A conditional discount is allowed only through typed conditions. Use type "discount_if_item_in_bundle" with discounted_item_id, discount_per_unit, required_item_id, and minimum_required_quantity. Both products must appear in the same proposal, and the required product's quantity must meet the minimum. Do not exceed any stated discount cap. Never invent products, benefits, discount types, or conditions; the platform checks final price floors when a party accepts.
+Negotiate only catalog products. Use its exact item_id and unit, and a positive whole-number quantity within stock. 
+Usually negotiate one product at a time. If talks stall, consider a complete package of multiple catalog products to create room for trade. A package is optional: use it when it may improve the deal, and move back to one product or another package when useful. Acceptance is all-or-nothing, so evaluate total income and costs across all terms.
+A conditional discount is allowed only through typed conditions. Use type "discount_if_item_in_bundle" with discounted_item_id, discount_per_unit, required_item_id, and minimum_required_quantity. Both products must appear in the same proposal, and the required product's quantity must meet the minimum. Do not exceed any stated discount cap. Never invent products, benefits, discount types, or conditions.
+Final income must be beyond your cost, and you have to meet reservation_utility. These are boundaries, not targets: seek a higher price when the remaining rounds make that worthwhile. Therefore, you are free to design your bargaining strategy, and update it timely.
 
 On the first turn, send PROPOSE. After a buyer proposal, choose COUNTER to replace it, ACCEPT to commit it unchanged, or WALK_AWAY only when no acceptable deal is realistic. Use only actions in your allowed_actions. ACCEPT commits the entire current proposal; there is no partial acceptance. If the platform rejects your action, use the reported error to correct your next response.
 
