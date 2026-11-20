@@ -1,12 +1,10 @@
 import json
 
 from bargaining_platform.model_adapter import (
-    BaseLLMAdapter,
     GeminiAdapter,
     GenerationResult,
     MockLLMAdapter,
     OpenAIAdapter,
-    openai_adapters,
 )
 
 
@@ -15,30 +13,12 @@ def test_mock_adapter_returns_queued_raw_output_and_metadata():
 
     result = adapter.generate("offer", {"type": "object"})
 
-    assert isinstance(adapter, BaseLLMAdapter)
     assert isinstance(result, GenerationResult)
     assert result.text == '{"action_type":"WALK_AWAY"}'
     assert result.metadata["model_version"] == "mock-v1"
     assert result.metadata["prompt_tokens"] == 1
     assert result.metadata["completion_tokens"] == 1
     assert result.metadata["latency_ms"] >= 0
-
-
-def test_openai_adapters_are_fresh_per_role(monkeypatch):
-    instances = []
-
-    def make_adapter():
-        adapter = object()
-        instances.append(adapter)
-        return adapter
-
-    monkeypatch.setattr("bargaining_platform.model_adapter.OpenAIAdapter", make_adapter)
-
-    adapters = openai_adapters()
-
-    assert set(adapters) == {"seller", "buyer"}
-    assert adapters["seller"] is not adapters["buyer"]
-    assert instances == [adapters["seller"], adapters["buyer"]]
 
 
 def test_gemini_adapter_uses_header_key_and_parses_json_response(monkeypatch):

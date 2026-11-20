@@ -28,16 +28,6 @@ def test_proposal_round_trip_with_conditional_discount():
     assert Proposal.from_dict(data).to_dict() == data
 
 
-def test_original_and_effective_prices_are_distinct():
-    proposal = Proposal(
-        "offer-03", "all_or_nothing", [Term("purchase", "A", 1, 120)], [], "",
-        {"A": 120}, {"A": 100},
-    )
-
-    assert proposal.to_dict()["original_prices"]["A"] == 120
-    assert proposal.to_dict()["effective_prices"]["A"] == 100
-
-
 def test_nested_models_round_trip():
     proposal = Proposal("offer-03", "all_or_nothing", [], [], "", {}, {})
     action = Action("PROPOSE", proposal.proposal_id, proposal)

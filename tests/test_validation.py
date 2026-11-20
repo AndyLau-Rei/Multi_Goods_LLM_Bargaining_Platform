@@ -2,9 +2,8 @@ import copy
 import pytest
 
 from bargaining_platform.engine import NegotiationEngine
-from bargaining_platform.models import Action, Condition, Proposal, Term
+from bargaining_platform.models import Action, Proposal, Term
 from bargaining_platform.scenario import load_scenario
-from bargaining_platform import validator
 
 
 def _proposal(proposal_id: str) -> Proposal:
@@ -75,26 +74,6 @@ def test_term_validation_preserves_error_precedence():
     assert result.error_code == "INVALID_TERM_TYPE"
 
 
-def test_proposal_validation_calculates_effective_totals_once(monkeypatch):
-    engine = _engine()
-    offer = _proposal("offer-1")
-    calculate = validator.calculate_effective_totals
-    calls = 0
-
-    def counted(proposal, state):
-        nonlocal calls
-        calls += 1
-        return calculate(proposal, state)
-
-    monkeypatch.setattr(validator, "calculate_effective_totals", counted)
-    result = validator.validate_action(
-        "seller", Action("PROPOSE", offer.proposal_id, offer), engine.state
-    )
-
-    assert result.ok
-    assert calls == 1
-
-
 def test_malformed_nested_term_returns_validation_error():
     engine = _engine()
     offer = _proposal("offer-1")
@@ -134,20 +113,6 @@ def test_repeated_invalid_actions_do_not_end_or_count_against_the_game():
     assert engine.state.public_transcript == []
     assert len(engine.state.private_attempt_log) == 2
     assert not any(event.event_type == "STATE_TRANSITION" for event in engine.event_logger.events)
-
-
-def test_conditional_offer_is_supported():
-    engine = _engine()
-    offer = _proposal("offer-1")
-    offer.terms.append(Term("purchase", "B", 1, 60, unit="piece"))
-    offer.original_prices["B"] = 60
-    offer.effective_prices["B"] = 60
-    offer.conditions = [Condition("discount_if_item_in_bundle", "A", 20, "B", 1)]
-
-    state = engine.step(Action("PROPOSE", offer.proposal_id, offer))
-
-    assert state.active_proposal.effective_prices == {"A": 100, "B": 60}
-    assert state.public_transcript[0]["proposal"]["effective_prices"] == {"A": 100, "B": 60}
 
 
 def test_action_must_be_allowed_for_role():

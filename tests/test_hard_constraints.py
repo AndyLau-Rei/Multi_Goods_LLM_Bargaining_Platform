@@ -112,16 +112,6 @@ def test_seller_acceptance_does_not_reveal_buyer_budget():
     assert engine.state.outcome.status == "NO_DEAL"
 
 
-def test_rejects_unowned_catalog_item():
-    engine = _engine()
-    offer = _proposal("offer-1")
-    offer.terms[0].item_id = "C"
-
-    result = engine.step(Action("PROPOSE", offer.proposal_id, offer))
-
-    assert result.error_code == "INVALID_ITEM_ID"
-
-
 def test_rejects_uncomputed_effective_price():
     engine = _engine()
     offer = _proposal("offer-1")

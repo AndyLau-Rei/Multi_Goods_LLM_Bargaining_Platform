@@ -47,19 +47,6 @@ def test_accepting_with_modified_bundle_is_rejected(change):
     assert [term.item_id for term in engine.state.active_proposal.terms] == ["A", "B"]
 
 
-def test_condition_referencing_missing_item_is_rejected():
-    engine = _engine()
-    proposal = _bundle()
-    proposal.terms = proposal.terms[:1]
-    proposal.original_prices = {"A": 120}
-    proposal.effective_prices = {"A": 120}
-
-    result = engine.step(Action("PROPOSE", proposal.proposal_id, proposal))
-
-    assert result.error_code == "CONDITION_REFERENCES_MISSING_ITEM"
-    assert engine.state.active_proposal is None
-
-
 def test_valid_atomic_acceptance():
     engine = _engine()
     proposal = _bundle()

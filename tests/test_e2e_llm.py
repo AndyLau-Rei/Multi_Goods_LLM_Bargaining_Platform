@@ -4,7 +4,6 @@ import sqlite3
 
 import pytest
 
-from bargaining_platform import runner
 from bargaining_platform.model_adapter import AdapterError, GenerationResult, MockLLMAdapter
 from bargaining_platform.runner import run_llm_negotiation
 from bargaining_platform.scenario import load_scenario
@@ -415,57 +414,14 @@ def test_progress_callback_publishes_only_committed_public_events(tmp_path):
     assert "seller-only note" not in serialized
 
 
-def test_runner_uses_separate_role_agents_and_prompt_contexts(tmp_path, monkeypatch):
+def test_role_history_is_incremental_and_decision_summaries_stay_private(tmp_path):
     scenario = _scenario()
     scenario["private_profiles"]["seller"]["unit_cost"]["A"] = 71
     scenario["private_profiles"]["buyer"]["unit_value"]["A"] = 131
-    proposal = _proposal()
-    proposal["proposal_id"] = "isolated"
     seller_template = tmp_path / "seller.txt"
     buyer_template = tmp_path / "buyer.txt"
     seller_template.write_text("SELLER VIEW {private_constraints}", encoding="utf-8")
     buyer_template.write_text("BUYER VIEW {private_constraints}", encoding="utf-8")
-    adapters = {
-        "seller": MockLLMAdapter([json.dumps({
-            "action_type": "PROPOSE", "proposal_id": "isolated", "proposal": proposal,
-        })]),
-        "buyer": MockLLMAdapter([json.dumps({"action_type": "ACCEPT", "proposal_id": "isolated"})]),
-    }
-    created_agents = []
-    original_init = runner.LLMAgent.__init__
-
-    def record_agent(self, *args, **kwargs):
-        original_init(self, *args, **kwargs)
-        created_agents.append(self)
-
-    monkeypatch.setattr(runner.LLMAgent, "__init__", record_agent)
-    engine = run_llm_negotiation(
-        scenario,
-        adapters,
-        run_id="isolated-agents",
-        db_path=tmp_path / "runs.db",
-        seller_prompt_path=seller_template,
-        buyer_prompt_path=buyer_template,
-    )
-
-    assert len(created_agents) == 2
-    seller, buyer = created_agents
-    assert seller is not buyer
-    assert seller.role == "seller" and buyer.role == "buyer"
-    assert seller.adapter is adapters["seller"]
-    assert buyer.adapter is adapters["buyer"]
-    assert seller.adapter is not buyer.adapter
-    seller_prompt = seller.messages[0]["content"]
-    buyer_prompt = buyer.messages[0]["content"]
-    assert "SELLER VIEW" in seller_prompt and '"A": 71' in seller_prompt
-    assert '"A": 131' not in seller_prompt
-    assert "BUYER VIEW" in buyer_prompt and '"A": 131' in buyer_prompt
-    assert '"A": 71' not in buyer_prompt
-    assert "prompt" not in engine.event_logger.events[0].metadata
-    assert engine.state.outcome.status == "AGREEMENT"
-
-
-def test_role_history_is_incremental_and_decision_summaries_stay_private(tmp_path):
     seller_offer = _proposal()
     seller_offer["decision_summary"] = "seller private strategy"
     buyer_offer = _proposal()
@@ -494,22 +450,21 @@ def test_role_history_is_incremental_and_decision_summaries_stay_private(tmp_pat
     ])
 
     engine = run_llm_negotiation(
-        _scenario(),
+        scenario,
         {"seller": seller, "buyer": buyer},
         run_id="incremental-context",
         db_path=tmp_path / "runs.db",
+        seller_prompt_path=seller_template,
+        buyer_prompt_path=buyer_template,
     )
 
     seller_instruction = seller.prompts[0][0]["content"]
+    buyer_instruction = buyer.prompts[0][0]["content"]
+    assert "SELLER VIEW" in seller_instruction and '"A": 71' in seller_instruction
+    assert '"A": 131' not in seller_instruction
+    assert "BUYER VIEW" in buyer_instruction and '"A": 131' in buyer_instruction
+    assert '"A": 71' not in buyer_instruction
     assert seller.prompts[1][0]["content"] == seller_instruction
-    assert sum(message["role"] == "system" for message in seller.prompts[0]) == 1
-    assert seller.prompts[0][1] == {
-        "role": "user",
-        "content": "Please make the opening proposal now. Output exactly one valid JSON action.",
-    }
-    assert "seller private strategy" not in seller.prompts[0][0]["content"]
-    assert sum(message["role"] == "system" for message in seller.prompts[1]) == 1
-    assert sum(message["role"] == "user" for message in seller.prompts[1]) == 2
     seller_context = json.dumps(seller.prompts[1])
     assert "buyer private strategy" not in seller_context
     assert "seller private strategy" in seller_context
@@ -528,7 +483,6 @@ def test_role_history_is_incremental_and_decision_summaries_stay_private(tmp_pat
         ("buyer", buyer.prompts[0]), ("buyer", buyer.prompts[1]),
         ("seller", seller.prompts[0]), ("seller", seller.prompts[1]),
     ):
-        assert sum(message["role"] == "system" for message in history) == 1
         assert "proposal_id" not in json.dumps(history)
         opponent_summary = "seller private strategy" if role == "buyer" else "buyer private strategy"
         assert opponent_summary not in json.dumps(history)

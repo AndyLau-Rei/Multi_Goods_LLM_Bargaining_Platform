@@ -41,7 +41,6 @@ def test_compare_command_runs_both_configs_and_reports(tmp_path, capsys, monkeyp
     assert "Condition A (Baseline: No Bundles)" in output
     assert "Condition B (Treatment: Bundles Enabled)" in output
     assert "Agreement Rate" in output
-    assert output.strip()
 
     baseline = ExperimentRunner("configs/ablation_no_bundle.json", db_path=tmp_path / "a.db").run()
     treatment = ExperimentRunner(

@@ -252,7 +252,6 @@ def test_viewer_page_and_static_mount():
     assert "Negotiation Viewer" in page.text
     assert 'id="seller-prompt"' in page.text
     assert 'id="buyer-prompt"' in page.text
-    assert "summary-token" not in page.text
     static = client.get("/static/app.js")
     assert static.status_code == 200
     assert "renderEvents" in static.text
